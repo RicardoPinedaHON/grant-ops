@@ -1,0 +1,36 @@
+{
+  "name": "grant-ops",
+  "version": "1.0.0",
+  "description": "AI-powered grant opportunity scanner for NGOs — LAC/Honduras focus",
+  "main": "src/cli.js",
+  "bin": {
+    "grant-ops": "src/cli.js"
+  },
+  "scripts": {
+    "init":   "node src/cli.js init",
+    "scan":   "node src/cli.js scan",
+    "score":  "node src/cli.js score",
+    "expand": "node src/cli.js expand",
+    "report": "node src/cli.js report",
+    "run":    "node src/cli.js run"
+  },
+  "keywords": [
+    "grants",
+    "ngo",
+    "fundraising",
+    "ai",
+    "latin-america"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "axios": "^1.16.1",
+    "chalk": "^4.1.2",
+    "cli-table3": "^0.6.5",
+    "date-fns": "^4.1.0",
+    "playwright": "^1.60.0",
+    "rss-parser": "^3.13.0",
+    "yaml": "^2.9.0"
+  }
+}

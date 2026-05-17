@@ -1,0 +1,78 @@
+# =============================================================
+# Fuentes de grants configuradas para LAC / Honduras
+# =============================================================
+
+apis:
+  reliefweb:
+    enabled: false
+    # -----------------------------------------------------------------------
+    # PARA ACTIVAR: La API v2 de ReliefWeb requiere un appname registrado.
+    # Registro gratuito e inmediato en: https://apidoc.reliefweb.int/parameters#appname
+    # Una vez que tengas tu appname, cambia enabled: true y agrega:
+    #   appname: "tu-appname-aqui"
+    # La API v2 devuelve convocatorias reales filtradas por Honduras/LAC.
+    # -----------------------------------------------------------------------
+    base_url: "https://api.reliefweb.int/v2"
+    appname: ""  # Completar tras registro
+    filters:
+      country: "Honduras"
+      region: "Central America and Caribbean"
+      themes: ["Environment", "Climate Change", "Water Sanitation Hygiene", "Education and Youth"]
+    limit: 50
+
+  grantsgov:
+    enabled: false  # RSS feeds deprecated (return HTML). Web scraper handles search.
+    base_url: "https://api.grants.gov/v1/api/search2"
+    keywords:
+      - "Honduras"
+      - "Central America"
+      - "Latin America"
+      - "environment"
+      - "climate"
+      - "youth"
+      - "air quality"
+      - "water"
+    limit: 50
+
+rss:
+  - name: "Grants.gov - Environment"
+    url: "https://www.grants.gov/rss/GG_NewOppByCategory.xml"
+    enabled: false  # Deprecated — returns HTML now. Replaced by direct scraping.
+  - name: "ImpactFunding Substack"
+    url: "https://impactfunding.substack.com/feed"
+    enabled: true
+  - name: "PhilanthropyNewsDigest RFPs"
+    url: "https://philanthropynewsdigest.org/rss/feed/rfp"
+    enabled: false  # Deprecated — returns HTML now. Candid migrated away from RSS.
+  - name: "Bond UK"
+    url: "https://www.bond.org.uk/feed/"
+    enabled: true  # UK development funding + LAC partnership opportunities
+  - name: "EU Funding & Tenders"
+    url: "https://ec.europa.eu/info/funding-tenders/opportunities/portal/rss"
+    enabled: false  # Activate when LAC filter is configured
+
+scrapers:
+  - name: "fundsforNGOs - Honduras"
+    url: "https://www.fundsforngos.org/tag/honduras/"
+    enabled: true
+    type: "playwright"
+  - name: "fundsforNGOs - Environment"
+    url: "https://www.fundsforngos.org/category/environment/"
+    enabled: true
+    type: "playwright"
+  - name: "USAID Honduras"
+    url: "https://www.usaid.gov/honduras/work-with-us/opportunities-local-organizations"
+    enabled: true
+    type: "playwright"
+  - name: "RECID Convocatorias"
+    url: "https://re-cid.org/convocatoria-y-oportunidades/"
+    enabled: true
+    type: "playwright"
+  - name: "Gestionándote"
+    url: "https://gestionandote.org/"
+    enabled: true
+    type: "playwright"
+  - name: "IKI Small Grants"
+    url: "https://www.international-climate-initiative.com/en/find-funding/small-grants/"
+    enabled: true
+    type: "playwright"

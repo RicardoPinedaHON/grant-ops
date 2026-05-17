@@ -1,0 +1,74 @@
+# =============================================================
+# GRANT-OPS — Plantilla de Perfil Organizacional
+# Copia este archivo como org-profile.yaml y complétalo
+# =============================================================
+
+organization:
+  name: "Nombre de tu ONG"
+  founded_year: 2018
+  legal_status: "Asociación civil sin fines de lucro"  # o equivalente en tu país
+  staff_size:
+    total: 10
+    operational_team: 7
+  annual_budget_usd: 80000
+  website: "https://www.tungo.org"
+  contact_email: "info@tungo.org"
+
+mission:
+  # Elige los que apliquen a tu organización
+  primary_focus:
+    - air_quality
+    - climate_action_mitigation
+    - circular_economy
+    - energy_transition
+    - water_governance
+    - youth_empowerment
+    - environmental_policy_advocacy
+    - biodiversity
+    - food_security
+    - gender_equality
+    - indigenous_rights
+  projects:
+    - name: "Nombre del proyecto"
+      tags: [etiqueta1, etiqueta2, etiqueta3]
+      description: "Una oración describiendo el proyecto y su impacto."
+      status: "active"  # active | closed_with_continuation_potential | dormant_activatable
+      funding_urgency: "high"  # high | medium | low
+  un_sdgs: [13, 15, 6]  # Números de los ODS relevantes
+
+geography:
+  country: "Honduras"  # País principal de operación
+  regions_of_operation:
+    - "Región o departamento 1"
+    - "Cobertura nacional"
+  willing_to_work_in:
+    - "Tu país"
+    - "Tu región"
+
+capacity:
+  grant_size_min_usd: 10000
+  grant_size_max_usd: 200000
+  grant_size_sweet_spot_min_usd: 25000
+  grant_size_sweet_spot_max_usd: 75000
+  reporting_capacity: "moderate"  # basic | moderate | strong
+  multi_year_grants: true
+  matching_funds_available: false
+  languages: ["es"]  # Idiomas de trabajo: es, en, fr, pt
+  can_receive_usd: true
+  audit_capacity: false
+
+experience:
+  years_operating: 5
+  total_grants_executed: 5
+  successful_grants_count: 5
+  largest_grant_received_usd: 30000
+  previous_funders:
+    - "Nombre del donante anterior"
+
+strategic_priorities:
+  preferred_grant_types:
+    - "project_based"
+    - "capacity_building"
+  partnerships_open_to: true
+  partner_exclusions:
+    - "fossil_fuel_companies"
