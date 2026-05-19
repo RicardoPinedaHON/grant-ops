@@ -54,6 +54,27 @@ function notionRequest(method, endpoint, body) {
   });
 }
 
+/** Ensure the database has all required properties. Creates missing ones. */
+async function ensureSchema() {
+  const db = await notionRequest('GET', `databases/${DB_ID}`, null);
+  if (!db.properties) return; // can't verify
+
+  const existing = Object.keys(db.properties);
+  const needed = {
+    'Deadline Note':   { rich_text: {} },
+    'Score Breakdown': { rich_text: {} },
+  };
+
+  const toCreate = Object.fromEntries(
+    Object.entries(needed).filter(([name]) => !existing.includes(name))
+  );
+
+  if (Object.keys(toCreate).length === 0) return;
+
+  console.log(`   Creating missing Notion columns: ${Object.keys(toCreate).join(', ')}`);
+  await notionRequest('PATCH', `databases/${DB_ID}`, { properties: toCreate });
+}
+
 async function getExistingURLs() {
   const urls = new Set();
   let cursor = undefined;
@@ -292,6 +313,7 @@ async function syncToNotion(scoredGrants) {
 
   console.log(`\n📋 Notion sync — ${sorted.length} grants (all tiers)...`);
 
+  await ensureSchema();
   const existing = await getExistingURLs();
   console.log(`   ${existing.size} already in Notion, skipping duplicates`);
 
