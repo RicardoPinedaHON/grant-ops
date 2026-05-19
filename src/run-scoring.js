@@ -12,6 +12,7 @@ const yaml = require('yaml');
 const { combineScores }                       = require('./scorer/index');
 const { scoreGrant }                          = require('./scorer/manual-scorer');
 const { saveTSV, saveMarkdownReport, saveHTMLReport } = require('./tracker/index');
+const { syncToNotion }                                = require('./notion-sync');
 
 const prescored = JSON.parse(fs.readFileSync('./output/grants_prescored.json', 'utf8'));
 const profile   = yaml.parse(fs.readFileSync('./org-profile.yaml', 'utf8'));
@@ -45,3 +46,5 @@ if (actionable.length) {
     if (scoring.application_angle) console.log('  ->', scoring.application_angle.slice(0, 120));
   });
 }
+
+syncToNotion(scoredGrants).catch(err => console.error('Notion sync error:', err.message));
