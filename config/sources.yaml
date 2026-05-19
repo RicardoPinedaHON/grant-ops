@@ -35,21 +35,33 @@ apis:
     limit: 50
 
 rss:
-  - name: "Grants.gov - Environment"
-    url: "https://www.grants.gov/rss/GG_NewOppByCategory.xml"
-    enabled: false  # Deprecated — returns HTML now. Replaced by direct scraping.
   - name: "ImpactFunding Substack"
     url: "https://impactfunding.substack.com/feed"
     enabled: true
-  - name: "PhilanthropyNewsDigest RFPs"
-    url: "https://philanthropynewsdigest.org/rss/feed/rfp"
-    enabled: false  # Deprecated — returns HTML now. Candid migrated away from RSS.
   - name: "Bond UK"
     url: "https://www.bond.org.uk/feed/"
-    enabled: true  # UK development funding + LAC partnership opportunities
+    enabled: true
+  - name: "Climate Finance Lab"
+    url: "https://climatefinancelab.org/feed/"
+    enabled: true
+  - name: "Environmental Defense Fund"
+    url: "https://www.edf.org/rss.xml"
+    enabled: true
+  - name: "IUCN News"
+    url: "https://www.iucn.org/news/rss"
+    enabled: true
+  - name: "Climate Policy Initiative"
+    url: "https://www.climatepolicyinitiative.org/feed/"
+    enabled: true
+  - name: "GrantAdvisor"
+    url: "https://www.grantadvisor.org/rss"
+    enabled: false  # Check if active
+  - name: "Grants.gov - Environment"
+    url: "https://www.grants.gov/rss/GG_NewOppByCategory.xml"
+    enabled: false
   - name: "EU Funding & Tenders"
     url: "https://ec.europa.eu/info/funding-tenders/opportunities/portal/rss"
-    enabled: false  # Activate when LAC filter is configured
+    enabled: false
 
 scrapers:
   - name: "fundsforNGOs - Honduras"

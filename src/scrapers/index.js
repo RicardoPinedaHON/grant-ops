@@ -4,6 +4,7 @@ const { fetchRSS } = require('./rss');
 const { fetchFundsForNGOs } = require('./fundsforngos');
 const { fetchSpanishAggregators } = require('./spanish-aggregators');
 const { fetchUSAIDAndGrantsGov } = require('./usaid-grantsgov');
+const { fetchFoundations } = require('./foundations');
 const { expandAllDigests } = require('./digest-expander');
 const { closeBrowser } = require('./playwright-base');
 
@@ -44,7 +45,7 @@ async function fetchAllGrants(sourcesConfig) {
     console.warn(`  fundsforNGOs failed: ${err.message}`);
   }
 
-  console.log('\n[4/4] Scraping Spanish aggregators + USAID...');
+  console.log('\n[4/5] Scraping Spanish aggregators + USAID...');
   try {
     const spanishGrants = await fetchSpanishAggregators();
     console.log(`  Spanish aggregators: ${spanishGrants.length} grants`);
@@ -59,6 +60,15 @@ async function fetchAllGrants(sourcesConfig) {
     allGrants.push(...govGrants);
   } catch (err) {
     console.warn(`  USAID/Grants.gov failed: ${err.message}`);
+  }
+
+  console.log('\n[5/5] Scraping foundations (IAF, UNDP SGP, CEPF, Rainforest Trust)...');
+  try {
+    const foundationGrants = await fetchFoundations();
+    console.log(`  Foundations: ${foundationGrants.length} grants`);
+    allGrants.push(...foundationGrants);
+  } catch (err) {
+    console.warn(`  Foundations failed: ${err.message}`);
   }
 
   // Expand digest/newsletter items into individual grant entries

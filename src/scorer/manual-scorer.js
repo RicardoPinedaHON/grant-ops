@@ -140,6 +140,91 @@ function scoreGrant(grant) {
     };
   }
 
+  // ── UNDP GEF Small Grants Programme ───────────────────────────────────────
+
+  if (src === 'UNDP SGP') {
+    return {
+      mission_alignment: 1.1, strategic_fit: 0.1,
+      best_projects: ['Guardianes del Bosque (La Mosquitia)', 'Economia Circular Ajuterique', 'Aire Limpio Honduras'],
+      application_angle: 'UNDP SGP Honduras directamente financia ONGs locales como Sustenta: $10k–$50k para biodiversidad, clima e indígenas — sin intermediario.',
+      confidence: 'high',
+      reasoning: 'Perfecto. UNDP SGP Honduras tiene programa activo, acepta aplicaciones directas de ONGs locales, y sus prioridades (biodiversidad, clima, comunidades indígenas, jóvenes) coinciden exactamente con los proyectos de Sustenta.'
+    };
+  }
+
+  // ── CEPF ──────────────────────────────────────────────────────────────────
+
+  if (src === 'CEPF') {
+    return {
+      mission_alignment: 1.0, strategic_fit: 0.05,
+      best_projects: ['Guardianes del Bosque (La Mosquitia)', 'Economia Circular Ajuterique'],
+      application_angle: 'Honduras está en el hotspot de biodiversidad Mesoamérica de CEPF — Guardianes del Bosque protegiendo La Mosquitia es exactamente el tipo de proyecto que financian.',
+      confidence: 'high',
+      reasoning: 'CEPF financia conservación de ecosistemas críticos en Mesoamérica. Honduras está dentro del hotspot. Guardianes del Bosque en La Mosquitia encaja perfectamente. Grants desde $5k hasta $500k para pequeñas ONGs.'
+    };
+  }
+
+  // ── IAF ───────────────────────────────────────────────────────────────────
+
+  if (src === 'IAF' || src === 'IAF / Grants.gov') {
+    // Score individual IAF programs by content
+    if (text.includes('environment') || text.includes('climate') || text.includes('natural resource')) {
+      return {
+        mission_alignment: 1.0, strategic_fit: 0.1,
+        best_projects: ['Guardianes del Bosque (La Mosquitia)', 'Aire Limpio Honduras', 'Economia Circular Ajuterique'],
+        application_angle: 'IAF ha invertido $57.9M en Honduras desde 1972 — Sustenta tiene el perfil exacto: ONG local, impacto comunitario medible, proyectos de base.',
+        confidence: 'high',
+        reasoning: 'IAF financia directamente ONGs en Honduras, acepta aplicaciones año redondo en inglés o español, sin deadline. Foco en organizaciones de base con impacto demostrable. Alta alineación.'
+      };
+    }
+    if (text.includes('youth') || text.includes('joven') || text.includes('leader')) {
+      return {
+        mission_alignment: 1.1, strategic_fit: 0.1,
+        best_projects: ['Honduras Carbono Cero / Climate Lab', 'Guardianes del Bosque (La Mosquitia)'],
+        application_angle: 'Sustenta como ONG liderada por jóvenes con proyectos comunitarios medibles es el perfil ideal para IAF.',
+        confidence: 'high',
+        reasoning: 'IAF prioriza liderazgo juvenil y organizaciones grassroots. Sustenta encaja perfectamente.'
+      };
+    }
+    return {
+      mission_alignment: 0.9, strategic_fit: 0.1,
+      best_projects: ['Honduras Carbono Cero / Climate Lab', 'Economia Circular Ajuterique'],
+      application_angle: 'IAF financia directamente ONGs hondureñas — aplicar sin deadline es una ventaja enorme.',
+      confidence: 'medium',
+      reasoning: 'IAF es fondo US dedicado a LAC grassroots. Honduras es país prioritario. Año redondo, sin costo, en español. Explorar cuál programa se alinea mejor.'
+    };
+  }
+
+  // ── Rainforest Trust ──────────────────────────────────────────────────────
+
+  if (src === 'Rainforest Trust') {
+    return {
+      mission_alignment: 0.9, strategic_fit: 0.05,
+      best_projects: ['Guardianes del Bosque (La Mosquitia)'],
+      application_angle: 'Guardianes del Bosque en La Mosquitia — la selva tropical más grande de CA — es exactamente el tipo de proyecto de áreas protegidas que Rainforest Trust financia.',
+      confidence: 'high',
+      reasoning: 'Rainforest Trust financia creación de áreas protegidas y conservación comunitaria en LAC. Tres deadlines anuales (Mar/Jul/Oct). La Mosquitia es uno de los bosques más biodiversos de Centroamérica — alta relevancia.'
+    };
+  }
+
+  // ── Climate Policy Initiative (RSS) ───────────────────────────────────────
+
+  if (src === 'Climate Policy Initiative' || src === 'CPI') {
+    if (text.includes('grant') || text.includes('fund') || text.includes('call') || text.includes('opportunit')) {
+      return {
+        mission_alignment: 0.7, strategic_fit: 0.0,
+        best_projects: ['Honduras Carbono Cero / Climate Lab', 'Aire Limpio Honduras'],
+        application_angle: null, confidence: 'medium',
+        reasoning: 'CPI publica análisis de financiamiento climático. Algunos artículos mencionan convocatorias activas relevantes para LAC.'
+      };
+    }
+    return {
+      mission_alignment: 0.0, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'high',
+      reasoning: 'Artículo de análisis de política climática — no es convocatoria activa.'
+    };
+  }
+
   // ── Bond UK ────────────────────────────────────────────────────────────────
 
   if (src === 'Bond UK') {
