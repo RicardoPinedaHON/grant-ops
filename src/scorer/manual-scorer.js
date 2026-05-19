@@ -195,6 +195,38 @@ function scoreGrant(grant) {
     };
   }
 
+  // ── Fast Forward ──────────────────────────────────────────────────────────
+
+  if (src === 'Fast Forward') {
+    return {
+      mission_alignment: 1.0, strategic_fit: 0.1,
+      best_projects: ['Aire Limpio Honduras', 'Honduras Carbono Cero / Climate Lab'],
+      application_angle: 'Sustenta aplica como tech nonprofit: red nacional de sensores PM2.5 + plataforma de datos climáticos = exactamente el perfil de FFWD. Ventana: julio 30 – sept 8.',
+      confidence: 'high',
+      reasoning: 'Fast Forward financia tech nonprofits globales con $25k + red de mentores. Sustenta califica: ONG registrada, usa tecnología (sensores PM2.5, plataformas de datos) para resolver problemas ambientales. Deadline conocido: Sept 8, 2026.'
+    };
+  }
+
+  // ── Climate Calling ───────────────────────────────────────────────────────
+
+  if (src === 'Climate Calling') {
+    if (text.includes('youth') || text.includes('young') || text.includes('joven') || text.includes('fellow')) {
+      return {
+        mission_alignment: 1.0, strategic_fit: 0.1,
+        best_projects: ['Honduras Carbono Cero / Climate Lab', 'Guardianes del Bosque (La Mosquitia)'],
+        application_angle: 'Sustenta como organización liderada por jóvenes en Honduras encaja perfectamente con las oportunidades de Climate Calling — liderazgo climático juvenil LAC.',
+        confidence: 'medium',
+        reasoning: 'Climate Calling cura oportunidades de liderazgo climático para jóvenes globalmente. Alta alineación con el perfil youth-led de Sustenta.'
+      };
+    }
+    return {
+      mission_alignment: 0.8, strategic_fit: 0.05,
+      best_projects: ['Honduras Carbono Cero / Climate Lab'],
+      application_angle: null, confidence: 'medium',
+      reasoning: 'Oportunidad de liderazgo climático en Climate Calling. Revisar elegibilidad específica.'
+    };
+  }
+
   // ── Rainforest Trust ──────────────────────────────────────────────────────
 
   if (src === 'Rainforest Trust') {

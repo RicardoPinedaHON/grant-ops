@@ -339,6 +339,129 @@ async function fetchRainforestTrust() {
   return grants;
 }
 
+// ─── Climate Calling ─────────────────────────────────────────────────────────
+async function fetchClimateCalling() {
+  const grants = [];
+  const page = await getPage();
+  try {
+    const ok = await safeGoto(page, 'https://www.climatecalling.org/opportunities', 30000);
+    if (!ok) return grants;
+    // JS-rendered — wait for content
+    await page.waitForTimeout(4000);
+    try { await page.waitForSelector('a, .opportunity, article, [class*="card"], [class*="item"]', { timeout: 8000 }); } catch (_) {}
+
+    const items = await page.evaluate(() => {
+      const results = [];
+      // Try various card selectors
+      const cards = document.querySelectorAll(
+        '[class*="opportunity"], [class*="card"], [class*="listing"], article, li[class*="item"]'
+      );
+
+      for (const card of Array.from(cards).slice(0, 40)) {
+        const titleEl = card.querySelector('h1, h2, h3, h4, [class*="title"], [class*="name"]');
+        const linkEl  = card.querySelector('a[href]');
+        const text    = card.textContent?.trim() || '';
+        if (!titleEl && text.length < 20) continue;
+        const title = titleEl?.textContent?.trim() || text.slice(0, 80);
+        if (!title || title.length < 10) continue;
+
+        const deadlineMatch = text.match(/(?:deadline|closes?|due|apply by)[:\s]+([A-Za-z]+ \d{1,2},?\s*\d{4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})/i)
+          || text.match(/([A-Za-z]+\s+\d{1,2},\s*\d{4})/);
+        const amountMatch = text.match(/\$[\d,]+(?:k)?/i);
+
+        results.push({
+          title,
+          url: linkEl?.href || 'https://www.climatecalling.org/opportunities',
+          description: text.slice(0, 400),
+          deadline: deadlineMatch?.[1] || null,
+          amount: amountMatch?.[0] || null,
+        });
+      }
+
+      // Fallback: grab all substantial links on the page
+      if (results.length === 0) {
+        const links = document.querySelectorAll('a[href*="opportunity"], a[href*="fellowship"], a[href*="grant"], a[href*="program"]');
+        for (const a of Array.from(links).slice(0, 20)) {
+          const title = a.textContent?.trim();
+          if (title && title.length > 15) {
+            results.push({ title, url: a.href, description: '', deadline: null, amount: null });
+          }
+        }
+      }
+      return results.filter(r => r.title.length > 10);
+    });
+
+    for (const item of items) {
+      grants.push({
+        source: 'Climate Calling',
+        id: `cc_${Buffer.from(item.url || item.title).toString('base64').slice(0, 20)}`,
+        title: item.title,
+        description: item.description || 'Climate leadership opportunity from Climate Calling — youth-focused global platform.',
+        url: item.url,
+        funder: 'Climate Calling',
+        deadline: item.deadline ? parseDate(item.deadline) : null,
+        amount_min: null,
+        amount_max: parseAmountMax(item.amount),
+        country: 'Global',
+        themes: ['youth_empowerment', 'climate_action_mitigation', 'environmental_policy_advocacy'],
+        type: 'foundation',
+        fetched_at: new Date().toISOString(),
+      });
+    }
+
+    if (grants.length === 0) {
+      // Static fallback if scraping fails
+      grants.push({
+        source: 'Climate Calling',
+        id: 'cc_platform_standing',
+        title: 'Climate Calling — Youth Climate Leadership Opportunities',
+        description: 'Climate Calling (by Climate Cardinals) curates fellowships, grants, and leadership programs for young climate leaders globally, including LAC. Updated continuously. Visit for current open calls.',
+        url: 'https://www.climatecalling.org/opportunities',
+        funder: 'Climate Calling / various funders',
+        deadline: null,
+        amount_min: null,
+        amount_max: null,
+        country: 'Global',
+        themes: ['youth_empowerment', 'climate_action_mitigation'],
+        type: 'foundation',
+        fetched_at: new Date().toISOString(),
+      });
+    }
+    console.log(`  [Climate Calling] ${grants.length} items`);
+  } catch (err) {
+    console.warn(`  [Climate Calling] Error: ${err.message}`);
+  } finally {
+    await page.close();
+  }
+  return grants;
+}
+
+// ─── Fast Forward (FFWD) — tech nonprofit accelerator ────────────────────────
+function fetchFastForward() {
+  // Annual cohort — 2026 application window: July 30 – September 8
+  const now = new Date();
+  const windowOpen  = new Date('2026-07-30');
+  const windowClose = new Date('2026-09-08');
+  const isOpen = now >= windowOpen && now <= windowClose;
+  const deadline = '2026-09-08';
+
+  return [{
+    source: 'Fast Forward',
+    id: 'ffwd_2026_accelerator',
+    title: `Fast Forward Tech Nonprofit Accelerator 2026${isOpen ? ' — OPEN NOW' : ''}`,
+    description: 'Fast Forward accelerates tech nonprofits using technology to solve social problems. $25,000 grant + mentorship + network. Open to nonprofits registered in any country (not US-only). Sustenta would qualify if applying as a tech-enabled environmental monitoring org. 2026 applications: July 30 – September 8.',
+    url: 'https://www.ffwd.org/accelerator',
+    funder: 'Fast Forward (FFWD)',
+    deadline,
+    amount_min: 25000,
+    amount_max: 25000,
+    country: 'Global',
+    themes: ['youth_empowerment', 'climate_action_mitigation', 'air_quality'],
+    type: 'foundation',
+    fetched_at: new Date().toISOString(),
+  }];
+}
+
 // ─── IAF GovGrants open listings ─────────────────────────────────────────────
 async function fetchIAFGovGrants() {
   const grants = [];
@@ -408,12 +531,16 @@ function parseAmountMax(str) {
 
 async function fetchFoundations() {
   const all = [];
+  // Fast Forward is static (no page needed), add immediately
+  all.push(...fetchFastForward());
+
   const sources = [
-    { fn: fetchIAF,          name: 'IAF'            },
-    { fn: fetchUNDPSGP,      name: 'UNDP SGP'       },
-    { fn: fetchCEPF,         name: 'CEPF'           },
+    { fn: fetchIAF,            name: 'IAF'             },
+    { fn: fetchUNDPSGP,        name: 'UNDP SGP'        },
+    { fn: fetchCEPF,           name: 'CEPF'            },
     { fn: fetchRainforestTrust, name: 'Rainforest Trust' },
-    { fn: fetchIAFGovGrants, name: 'IAF/Grants.gov' },
+    { fn: fetchClimateCalling, name: 'Climate Calling'  },
+    { fn: fetchIAFGovGrants,   name: 'IAF/Grants.gov'  },
   ];
 
   for (const { fn, name } of sources) {
