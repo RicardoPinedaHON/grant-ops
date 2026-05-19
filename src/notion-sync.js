@@ -1,16 +1,14 @@
 'use strict';
 /**
  * notion-sync.js
- * Pushes scored grants to Notion database.
- * Skips grants already in Notion (deduplicates by URL).
- * Only syncs CONSIDER and above (score >= 2.8), skips SKIP tier.
+ * Pushes ALL scored grants to Notion, grouped by tier.
+ * Deduplicates by URL so re-runs only add new grants.
  */
 
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
 
-// Load .env manually (no dotenv dependency)
 function loadEnv() {
   const envPath = path.join(__dirname, '..', '.env');
   if (!fs.existsSync(envPath)) return;
@@ -54,7 +52,6 @@ function notionRequest(method, endpoint, body) {
   });
 }
 
-// Get all URLs already in the Notion DB to avoid duplicates
 async function getExistingURLs() {
   const urls = new Set();
   let cursor = undefined;
@@ -80,25 +77,36 @@ function tierLabel(score) {
   return '⏭ Skip';
 }
 
+function tierOrder(score) {
+  if (score >= 4.2) return 0;
+  if (score >= 3.5) return 1;
+  if (score >= 2.8) return 2;
+  return 3;
+}
+
 function formatAmount(grant) {
-  if (grant.amount_max) {
-    const min = grant.amount_min ? `$${grant.amount_min.toLocaleString()}–` : '$';
-    return `${min}$${grant.amount_max.toLocaleString()}`;
+  if (grant.amount_max && grant.amount_min) {
+    return `$${Number(grant.amount_min).toLocaleString()} – $${Number(grant.amount_max).toLocaleString()}`;
   }
-  return 'TBD';
+  if (grant.amount_max) {
+    return `Up to $${Number(grant.amount_max).toLocaleString()}`;
+  }
+  if (grant.amount_min) {
+    return `From $${Number(grant.amount_min).toLocaleString()}`;
+  }
+  return 'Amount TBD';
 }
 
 function buildPage(grant, scoring) {
-  const score = scoring.final_score ?? 0;
-  const today = new Date().toISOString().split('T')[0];
+  const score   = scoring.final_score ?? 0;
+  const today   = new Date().toISOString().split('T')[0];
+  const amount  = formatAmount(grant);
 
-  // Parse deadline
   let deadlineObj = null;
-  if (grant.deadline && grant.deadline.match(/^\d{4}-\d{2}-\d{2}$/)) {
+  if (grant.deadline && /^\d{4}-\d{2}-\d{2}$/.test(grant.deadline)) {
     deadlineObj = { start: grant.deadline };
   }
 
-  // Themes as multi_select options
   const themes = (grant.themes || []).slice(0, 10).map(t => ({
     name: String(t).slice(0, 100),
   }));
@@ -109,16 +117,16 @@ function buildPage(grant, scoring) {
       Name: {
         title: [{ text: { content: String(grant.title || 'Untitled').slice(0, 200) } }],
       },
+      Score: { number: Math.round(score * 100) / 100 },
+      Tier: { select: { name: tierLabel(score) } },
+      ...(deadlineObj ? { Deadline: { date: deadlineObj } } : {}),
+      URL: { url: grant.url || null },
       Funder: {
         rich_text: [{ text: { content: String(grant.funder || '').slice(0, 200) } }],
       },
-      Score: { number: Math.round(score * 100) / 100 },
-      Tier: { select: { name: tierLabel(score) } },
-      Status: { select: { name: 'New' } },
       Amount: {
-        rich_text: [{ text: { content: formatAmount(grant) } }],
+        rich_text: [{ text: { content: amount } }],
       },
-      ...(deadlineObj ? { Deadline: { date: deadlineObj } } : {}),
       Country: {
         rich_text: [{ text: { content: String(grant.country || '').slice(0, 200) } }],
       },
@@ -129,10 +137,10 @@ function buildPage(grant, scoring) {
       'Best Projects': {
         rich_text: [{ text: { content: (scoring.best_projects || []).join(', ').slice(0, 500) } }],
       },
-      URL: { url: grant.url || null },
       Source: {
         rich_text: [{ text: { content: String(grant.source || '').slice(0, 200) } }],
       },
+      Status: { select: { name: 'New' } },
       'Scan Date': { date: { start: today } },
     },
   };
@@ -140,23 +148,28 @@ function buildPage(grant, scoring) {
 
 async function syncToNotion(scoredGrants) {
   if (!TOKEN || !DB_ID) {
-    console.log('  ⚠  Notion not configured — skipping sync (add NOTION_TOKEN + NOTION_DB_ID to .env)');
+    console.log('  ⚠  Notion not configured — add NOTION_TOKEN + NOTION_DB_ID to .env');
     return;
   }
 
-  // Only sync MONITOR and above
-  const toSync = scoredGrants.filter(g =>
-    g.scoring && g.scoring.final_score != null && g.scoring.final_score >= 2.8
-  );
+  // Sort: tier first, then score descending within tier
+  const sorted = [...scoredGrants]
+    .filter(g => g.scoring && g.scoring.final_score != null)
+    .sort((a, b) => {
+      const ta = tierOrder(a.scoring.final_score);
+      const tb = tierOrder(b.scoring.final_score);
+      if (ta !== tb) return ta - tb;
+      return b.scoring.final_score - a.scoring.final_score;
+    });
 
-  console.log(`\n📋 Notion sync — checking ${toSync.length} grants (score ≥ 2.8)...`);
+  console.log(`\n📋 Notion sync — ${sorted.length} grants (all tiers)...`);
 
   const existing = await getExistingURLs();
   console.log(`   ${existing.size} already in Notion, skipping duplicates`);
 
   let added = 0, skipped = 0, errors = 0;
 
-  for (const { grant, scoring } of toSync) {
+  for (const { grant, scoring } of sorted) {
     if (grant.url && existing.has(grant.url)) {
       skipped++;
       continue;
@@ -176,7 +189,7 @@ async function syncToNotion(scoredGrants) {
     }
   }
 
-  console.log(`\n   ✅ Added ${added} new grants | ${skipped} already existed | ${errors} errors`);
+  console.log(`\n   ✅ Added ${added} new | ${skipped} already existed | ${errors} errors`);
   if (added > 0) {
     console.log(`   🔗 https://www.notion.so/${DB_ID.replace(/-/g, '')}`);
   }
@@ -184,7 +197,6 @@ async function syncToNotion(scoredGrants) {
 
 module.exports = { syncToNotion };
 
-// Run standalone: node src/notion-sync.js
 if (require.main === module) {
   const SCORED = path.join(__dirname, '..', 'output', 'grants_scored.json');
   if (!fs.existsSync(SCORED)) {
