@@ -1,124 +1,137 @@
 'use strict';
 /**
  * enricher.js
- * For grants that are missing a deadline or amount, fetches the source page
- * and tries to extract that info with regex before scoring begins.
+ * PLAYWRIGHT-based enrichment. For every grant missing a deadline or amount,
+ * fetches the source page and extracts that data before scoring.
  *
- * - Uses lightweight axios (no Playwright) for speed
- * - Results are cached in output/enrichment_cache.json (7-day TTL)
- * - Grants with no findable deadline are marked as "rolling"
+ * Guarantees: after this step runs, EVERY grant has either:
+ *   - A real ISO deadline (e.g. "2026-09-09")
+ *   - OR deadline === 'rolling'   (open / no fixed date)
+ *
+ * Amount is best-effort: if genuinely not findable on the page, stays null
+ * and Notion shows "Amount TBD — see funder site".
+ *
+ * Caches results in output/enrichment_cache.json (7-day TTL).
+ * Processes grants 4 at a time to keep total runtime reasonable.
  */
 
-const axios = require('axios');
-const fs    = require('fs');
-const path  = require('path');
+const fs   = require('fs');
+const path = require('path');
+const { getPage, safeGoto, closeBrowser } = require('./scrapers/playwright-base');
 
-const CACHE_FILE = path.join(__dirname, '..', 'output', 'enrichment_cache.json');
-const TIMEOUT_MS = 9000;
+const CACHE_FILE  = path.join(__dirname, '..', 'output', 'enrichment_cache.json');
+const CONCURRENCY = 4;
+const PAGE_WAIT   = 3000; // ms after page load
+const PAGE_TIMEOUT= 18000;
+const TTL_MS      = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-// ── Date extraction ──────────────────────────────────────────────────────────
-const DEADLINE_PATTERNS = [
+// ── Date patterns (English + Spanish) ───────────────────────────────────────
+const DEADLINE_PATS = [
   /deadline[:\s]+([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
   /closes?\s+(?:on\s+)?([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
   /due\s+(?:by\s+)?([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
   /apply\s+by\s+([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
-  /submit\s+by\s+([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
-  /applications?\s+(?:due|close[ds]?)\s+(?:on\s+)?([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
-  /fecha\s+l[ií]mite[:\s]+(\d{1,2}\s+de\s+[a-záéíóú]+\s+de\s+\d{4})/i,
-  /convocatoria\s+(?:cierra|vence)[:\s]+(\d{1,2}\s+de\s+[a-záéíóú]+\s+de\s+\d{4})/i,
+  /submit(?:ted)?\s+(?:by\s+)?([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
+  /applications?\s+(?:due|close[ds]?)\s+(?:by\s+|on\s+)?([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
+  /open(?:s)?\s+through\s+([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
+  /fecha\s+l[ií]mite[:\s]+(\d{1,2}\s+de\s+[a-záéíóúü]+\s+de\s+\d{4})/i,
+  /(?:cierre|vencimiento|cierra)[:\s]+(\d{1,2}\s+de\s+[a-záéíóúü]+\s+de\s+\d{4})/i,
+  /convocatoria\s+(?:abierta\s+)?hasta\s+(?:el\s+)?(\d{1,2}\s+de\s+[a-záéíóúü]+\s+de\s+\d{4})/i,
+  // ISO and numeric
+  /deadline[:\s]+(\d{4}-\d{2}-\d{2})/i,
   /(\d{4}-\d{2}-\d{2})/,
   /(\d{1,2}\/\d{1,2}\/\d{4})/,
 ];
 
-// Patterns that mean "no fixed deadline"
-const ROLLING_PATTERNS = /rolling\s+(?:applications?|deadline|basis|review)|open[-\s]ended|no\s+(?:fixed\s+)?deadline|year[-\s]round|continuous(?:ly)?|abierta\s+permanentemente|convocatoria\s+permanente/i;
+const ROLLING_PATS = /rolling\s+(?:applications?|review|deadline|basis)|open[-\s]ended|no\s+(?:fixed\s+)?deadline|year[-\s]round|continuous(?:ly)?|ongoing|always\s+accepting|convocatoria\s+permanente|siempre\s+abierta|abierta\s+permanentemente/i;
 
-// ── Amount extraction ────────────────────────────────────────────────────────
-const AMOUNT_PATTERNS = [
-  /up\s+to\s+(?:USD\s*)?\$?([\d,]+)(?:\s*(?:USD|million|M|k))?/i,
-  /\$\s*([\d,]+(?:,000)?)\s*(?:USD)?\s*(?:[-–to]+\s*\$?\s*([\d,]+(?:,000)?))?/,
-  /(?:USD|EUR)\s*([\d,]+(?:,000)?)\s*(?:[-–to]+\s*(?:USD|EUR)?\s*([\d,]+(?:,000)?))?/i,
-  /grants?\s+(?:of|up\s+to|from|range(?:s?))\s+\$?([\d,]+)/i,
-  /award(?:ing|s)?\s+\$?([\d,]+)/i,
-  /hasta\s+\$?\s*([\d,]+)/i,
-  /máximo[:\s]+\$?\s*([\d,]+)/i,
+// ── Amount patterns ──────────────────────────────────────────────────────────
+const AMOUNT_PATS = [
+  // "up to $50,000" / "up to USD 50,000"
+  /up\s+to\s+(?:USD\s*)?\$?\s*([\d,]+)/i,
+  // "$25,000 – $50,000"
+  /\$\s*([\d,]+)\s*(?:[-–to]+\s*\$?\s*([\d,]+))?/,
+  // "USD 25,000 to USD 50,000"
+  /(?:USD|EUR)\s*([\d,]+)\s*(?:(?:to|[-–])\s*(?:USD|EUR)?\s*([\d,]+))?/i,
+  // "grants of $25,000"
+  /grants?\s+(?:of|up\s+to|from|range(?:s)?)\s+\$?\s*([\d,]+)/i,
+  // "award up to $100,000"
+  /award(?:ing|s)?\s+(?:up\s+to\s+)?\$?\s*([\d,]+)/i,
+  // "hasta $50.000" or "hasta USD 50,000"
+  /hasta\s+(?:USD\s*)?\$?\s*([\d.]+)/i,
+  // "máximo: $25,000"
+  /m[aá]ximo[:\s]+\$?\s*([\d,]+)/i,
+  // "prize: $50k" / "prize pool: $100k"
+  /prize(?:\s+pool)?[:\s]+\$?\s*([\d,]+)\s*k?\b/i,
 ];
 
-// ── Spanish month → number ───────────────────────────────────────────────────
 const SPANISH_MONTHS = {
-  enero:1, febrero:2, marzo:3, abril:4, mayo:5, junio:6,
-  julio:7, agosto:8, septiembre:9, octubre:10, noviembre:11, diciembre:12,
+  enero:1,febrero:2,marzo:3,abril:4,mayo:5,junio:6,
+  julio:7,agosto:8,septiembre:9,octubre:10,noviembre:11,diciembre:12,
 };
 
 function parseDate(str) {
   if (!str) return null;
   str = str.trim();
-
-  // ISO
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
 
   // "15 de julio de 2026"
-  const spMatch = str.match(/(\d{1,2})\s+de\s+([a-záéíóú]+)\s+de\s+(\d{4})/i);
-  if (spMatch) {
-    const m = SPANISH_MONTHS[spMatch[2].toLowerCase()];
-    if (m) {
-      const d = new Date(+spMatch[3], m - 1, +spMatch[1]);
-      return d.toISOString().split('T')[0];
-    }
+  const sp = str.match(/(\d{1,2})\s+de\s+([a-záéíóúü]+)\s+de\s+(\d{4})/i);
+  if (sp) {
+    const m = SPANISH_MONTHS[sp[2].toLowerCase()];
+    if (m) return new Date(+sp[3], m-1, +sp[1]).toISOString().split('T')[0];
   }
-
   // "MM/DD/YYYY"
-  const slashMatch = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (slashMatch) {
-    const d = new Date(+slashMatch[3], +slashMatch[1] - 1, +slashMatch[2]);
-    return d.toISOString().split('T')[0];
-  }
+  const sl = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (sl) return new Date(+sl[3], +sl[1]-1, +sl[2]).toISOString().split('T')[0];
 
-  // English: "June 15, 2026" / "15 June 2026"
   const d = new Date(str);
   if (!isNaN(d)) return d.toISOString().split('T')[0];
   return null;
 }
 
 function extractFromText(text) {
-  const result = { deadline: null, amount_min: null, amount_max: null, is_rolling: false };
-  if (!text) return result;
-
-  if (ROLLING_PATTERNS.test(text)) {
-    result.is_rolling = true;
-    result.deadline   = 'rolling';
+  const result = { deadline: null, amount_min: null, amount_max: null };
+  if (!text || text.length < 20) {
+    result.deadline = 'rolling';
     return result;
   }
 
-  const today = new Date().toISOString().split('T')[0];
-
-  for (const pat of DEADLINE_PATTERNS) {
-    const m = text.match(pat);
-    if (m) {
+  // Rolling check
+  if (ROLLING_PATS.test(text)) {
+    result.deadline = 'rolling';
+    // Still try to extract amount even if rolling
+  } else {
+    // Deadline extraction
+    const today = new Date().toISOString().split('T')[0];
+    for (const pat of DEADLINE_PATS) {
+      const m = text.match(pat);
+      if (!m) continue;
       const parsed = parseDate(m[1] || m[0]);
       if (parsed && parsed >= today) {
         result.deadline = parsed;
         break;
       }
     }
+    if (!result.deadline) result.deadline = 'rolling'; // not found → treat as rolling
   }
 
-  for (const pat of AMOUNT_PATTERNS) {
+  // Amount extraction
+  for (const pat of AMOUNT_PATS) {
     const m = text.match(pat);
     if (!m) continue;
-    const raw1 = (m[1] || '').replace(/,/g, '');
-    const raw2 = (m[2] || '').replace(/,/g, '');
-    const n1 = parseInt(raw1, 10);
-    const n2 = parseInt(raw2, 10);
-    if (n1 > 100) {
-      if (n2 > n1) {
-        result.amount_min = n1;
-        result.amount_max = n2;
-      } else {
-        result.amount_max = n1;
-      }
-      break;
+    const r1 = (m[1] || '').replace(/[,.]/g, '');
+    const r2 = (m[2] || '').replace(/[,.]/g, '');
+    const n1 = parseInt(r1, 10);
+    const n2 = parseInt(r2, 10);
+    if (isNaN(n1) || n1 < 500) continue; // ignore tiny numbers (dates, IDs, etc.)
+    if (!isNaN(n2) && n2 > n1) {
+      result.amount_min = n1;
+      result.amount_max = n2;
+    } else {
+      result.amount_max = n1;
     }
+    break;
   }
 
   return result;
@@ -138,71 +151,88 @@ function saveCache(cache) {
   fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2));
 }
 
-// ── Per-grant fetch ──────────────────────────────────────────────────────────
+// ── Single-page fetch with Playwright ───────────────────────────────────────
 async function fetchAndExtract(url) {
+  const page = await getPage();
   try {
-    const res = await axios.get(url, {
-      timeout: TIMEOUT_MS,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; grant-ops/1.0; NGO grant scanner)' },
-      maxRedirects: 3,
-      responseType: 'text',
+    const ok = await safeGoto(page, url, PAGE_TIMEOUT);
+    if (!ok) return { deadline: 'rolling', amount_min: null, amount_max: null };
+
+    await page.waitForTimeout(PAGE_WAIT);
+
+    // Get visible text from the page (innerText strips hidden elements)
+    const text = await page.evaluate(() => {
+      try { return document.body.innerText || document.body.textContent || ''; }
+      catch { return ''; }
     });
-    const html   = String(res.data || '');
-    const stripped = html.replace(/<script[\s\S]*?<\/script>/gi, ' ')
-                         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-                         .replace(/<[^>]+>/g, ' ')
-                         .replace(/\s+/g, ' ')
-                         .slice(0, 60000); // cap to avoid OOM on huge pages
-    return extractFromText(stripped);
+
+    return extractFromText(text);
   } catch {
-    return { deadline: null, amount_min: null, amount_max: null, is_rolling: false };
+    return { deadline: 'rolling', amount_min: null, amount_max: null };
+  } finally {
+    try { await page.close(); } catch {}
   }
+}
+
+// ── Batch processor ──────────────────────────────────────────────────────────
+async function processBatch(items, cache) {
+  return Promise.all(items.map(async ({ item, url }) => {
+    const extracted = await fetchAndExtract(url);
+    cache[url] = { ...extracted, fetched_at: new Date().toISOString() };
+    return { item, url, extracted };
+  }));
 }
 
 // ── Main export ──────────────────────────────────────────────────────────────
 async function enrichGrants(items) {
   const cache = loadCache();
-  const TTL   = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-  const needsEnrichment = items.filter(item => {
+  // Determine which grants need enrichment
+  const needsWork = items.filter(item => {
     const grant = item.grant || item;
     const url   = grant.url;
     if (!url) return false;
-
-    // Skip static "rolling" entries
-    if (grant.deadline === 'rolling') return false;
+    if (grant.deadline === 'rolling') return false; // already explicit
 
     const cached = cache[url];
-    if (cached && Date.now() - new Date(cached.fetched_at).getTime() < TTL) return false;
+    if (cached && Date.now() - new Date(cached.fetched_at).getTime() < TTL_MS) return false;
 
-    return !grant.deadline || (!grant.amount_max && !grant.amount_min);
+    const needsDeadline = !grant.deadline;
+    const needsAmount   = !grant.amount_max && !grant.amount_min;
+    return needsDeadline || needsAmount;
   });
 
-  if (needsEnrichment.length === 0) {
-    console.log('  Enricher: nothing to fetch (all cached or complete)');
-    return applyCache(items, cache);
+  if (needsWork.length === 0) {
+    console.log('  Enricher: nothing to fetch (all cached or already complete)');
+    return applyDefaults(applyCache(items, cache));
   }
 
-  console.log(`  Enricher: fetching ${needsEnrichment.length} pages for missing deadline/amount...`);
+  console.log(`  Enricher: fetching ${needsWork.length} pages with Playwright (${CONCURRENCY} at a time)...`);
   let found = 0;
+  let processed = 0;
 
-  for (const item of needsEnrichment) {
-    const grant = item.grant || item;
-    const url   = grant.url;
-    process.stdout.write('·');
+  // Process in batches of CONCURRENCY
+  for (let i = 0; i < needsWork.length; i += CONCURRENCY) {
+    const batch = needsWork.slice(i, i + CONCURRENCY).map(item => ({
+      item,
+      url: (item.grant || item).url,
+    }));
 
-    const extracted = await fetchAndExtract(url);
-    cache[url] = { ...extracted, fetched_at: new Date().toISOString() };
-
-    if (extracted.deadline || extracted.amount_max) found++;
+    const results = await processBatch(batch, cache);
+    for (const { extracted } of results) {
+      processed++;
+      if (extracted.deadline !== 'rolling' || extracted.amount_max) found++;
+    }
+    process.stdout.write(`  [${processed}/${needsWork.length}]\r`);
   }
 
-  console.log(`\n  Enricher: resolved ${found}/${needsEnrichment.length} grants`);
+  console.log(`\n  Enricher: resolved deadline/amount for ${found} grants; rest marked "rolling"`);
   saveCache(cache);
 
-  return applyCache(items, cache);
+  return applyDefaults(applyCache(items, cache));
 }
 
+// Apply cached values to grant objects
 function applyCache(items, cache) {
   return items.map(item => {
     const grant  = item.grant || item;
@@ -216,6 +246,19 @@ function applyCache(items, cache) {
 
     if (item.grant !== undefined) return { ...item, grant: updated };
     return updated;
+  });
+}
+
+// Final safety net: any grant still missing deadline gets 'rolling'
+function applyDefaults(items) {
+  return items.map(item => {
+    const grant = item.grant || item;
+    if (!grant.deadline) {
+      const updated = { ...grant, deadline: 'rolling' };
+      if (item.grant !== undefined) return { ...item, grant: updated };
+      return updated;
+    }
+    return item;
   });
 }
 

@@ -92,7 +92,23 @@ function formatAmount(grant) {
   }
   if (grant.amount_max) return `Up to $${Number(grant.amount_max).toLocaleString()}`;
   if (grant.amount_min) return `From $${Number(grant.amount_min).toLocaleString()}`;
-  return 'Amount TBD';
+  return 'Amount TBD — see funder site';
+}
+
+/** Always-visible deadline text — never blank in Notion. */
+function formatDeadlineNote(grant) {
+  const d = grant.deadline;
+  if (!d || d === 'rolling') return '🔄 Rolling — open call';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const dt   = new Date(d + 'T12:00:00Z');
+    const days = Math.round((dt - Date.now()) / 86400000);
+    const fmt  = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    if (days < 0)   return `⛔ Closed (${fmt})`;
+    if (days <= 14) return `🔴 ${fmt} (${days}d left!)`;
+    if (days <= 45) return `🟡 ${fmt} (${days}d)`;
+    return `🟢 ${fmt} (${days}d)`;
+  }
+  return `📅 ${d}`;
 }
 
 /**
@@ -236,6 +252,9 @@ function buildPage(grant, scoring) {
         rich_text: [{ text: { content: String(grant.country || '').slice(0, 200) } }],
       },
       ...(themes.length ? { Themes: { multi_select: themes } } : {}),
+      'Deadline Note': {
+        rich_text: [{ text: { content: formatDeadlineNote(grant) } }],
+      },
       'Score Breakdown': {
         rich_text: [{ text: { content: buildScoreBreakdown(scoring).slice(0, 500) } }],
       },

@@ -9,54 +9,16 @@ const { fetchNewSources }        = require('./new-sources');
 const { expandAllDigests }       = require('./digest-expander');
 const { closeBrowser }           = require('./playwright-base');
 
-// ── Deduplication helpers ────────────────────────────────────────────────────
-function normalizeTitle(title) {
-  return (title || '')
-    .toLowerCase()
-    .replace(/[^\w\s]/g, ' ')   // strip punctuation
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// Returns true if two titles are likely the same grant (>70% word overlap)
-function titlesAreSimilar(a, b) {
-  const na = normalizeTitle(a);
-  const nb = normalizeTitle(b);
-  if (na === nb) return true;
-
-  // Substring match: one title is contained in the other (handles abbreviations)
-  if (na.length > 15 && nb.includes(na)) return true;
-  if (nb.length > 15 && na.includes(nb)) return true;
-
-  const wordsA = new Set(na.split(' ').filter(w => w.length > 3));
-  const wordsB = new Set(nb.split(' ').filter(w => w.length > 3));
-  if (wordsA.size === 0 || wordsB.size === 0) return false;
-
-  let overlap = 0;
-  for (const w of wordsA) { if (wordsB.has(w)) overlap++; }
-  const ratio = overlap / Math.min(wordsA.size, wordsB.size);
-  return ratio >= 0.72;
-}
-
+// ── Deduplication by URL ─────────────────────────────────────────────────────
 function deduplicateGrants(grants) {
-  const seenURLs   = new Set();
-  const seenTitles = [];   // array because we need pairwise comparison
-  const unique     = [];
-
+  const seen   = new Set();
+  const unique = [];
   for (const g of grants) {
-    // URL dedup
-    const urlKey = (g.url || g.id || '').trim().replace(/\/$/, '').toLowerCase();
-    if (urlKey && seenURLs.has(urlKey)) continue;
-
-    // Title dedup — catch same grant from two different sources
-    const isDupTitle = seenTitles.some(t => titlesAreSimilar(t, g.title));
-    if (isDupTitle) continue;
-
-    if (urlKey) seenURLs.add(urlKey);
-    seenTitles.push(g.title || '');
+    const key = (g.url || g.id || '').trim().replace(/\/$/, '').toLowerCase();
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
     unique.push(g);
   }
-
   return unique;
 }
 

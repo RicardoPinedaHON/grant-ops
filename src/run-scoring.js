@@ -20,6 +20,7 @@ const { scoreGrant }                                  = require('./scorer/manual
 const { saveTSV, saveMarkdownReport, saveHTMLReport } = require('./tracker/index');
 const { syncToNotion }                                = require('./notion-sync');
 const { enrichGrants }                                = require('./enricher');
+const { closeBrowser }                                = require('./scrapers/playwright-base');
 
 async function main() {
   const prescored = JSON.parse(fs.readFileSync('./output/grants_prescored.json', 'utf8'));
@@ -65,7 +66,10 @@ async function main() {
     });
   }
 
-  // ── Step 4: Notion sync ───────────────────────────────────────────────────
+  // ── Step 4: Close Playwright browser (opened by enricher) ────────────────
+  await closeBrowser().catch(() => {});
+
+  // ── Step 5: Notion sync ───────────────────────────────────────────────────
   await syncToNotion(scoredGrants).catch(err => console.error('Notion sync error:', err.message));
 }
 
