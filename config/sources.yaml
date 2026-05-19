@@ -44,18 +44,32 @@ rss:
   - name: "Climate Finance Lab"
     url: "https://climatefinancelab.org/feed/"
     enabled: true
-  - name: "Environmental Defense Fund"
-    url: "https://www.edf.org/rss.xml"
-    enabled: true
-  - name: "IUCN News"
-    url: "https://www.iucn.org/news/rss"
-    enabled: true
   - name: "Climate Policy Initiative"
     url: "https://www.climatepolicyinitiative.org/feed/"
     enabled: true
+  # Terra Viva: agriculture/biodiversity/climate grants for developing countries
+  # 800+ programs, LAC focus, perfect signal-to-noise for Honduras env NGOs
+  - name: "Terra Viva Grants"
+    url: "https://terravivagrants.org/feed/"
+    enabled: true
+  # Devex free public feed (development sector, broad LAC coverage)
+  - name: "Devex News"
+    url: "https://www.devex.com/news/rss.xml"
+    enabled: true
+  # Grant & Co Partners: weekly $0–$150k opportunities including youth/environment
+  - name: "Grant & Co Partners"
+    url: "https://grantandcopartners.substack.com/feed"
+    enabled: true
+  # Environmental Defense Fund (check periodically — URL may change)
+  - name: "Environmental Defense Fund"
+    url: "https://www.edf.org/rss.xml"
+    enabled: false  # 404 as of 2026-05; re-enable if URL is updated
+  - name: "IUCN News"
+    url: "https://www.iucn.org/news/rss"
+    enabled: false  # Malformed XML as of 2026-05; re-enable if fixed
   - name: "GrantAdvisor"
     url: "https://www.grantadvisor.org/rss"
-    enabled: false  # Check if active
+    enabled: false
   - name: "Grants.gov - Environment"
     url: "https://www.grants.gov/rss/GG_NewOppByCategory.xml"
     enabled: false

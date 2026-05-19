@@ -257,6 +257,223 @@ function scoreGrant(grant) {
     };
   }
 
+  // ── MAR Fund ──────────────────────────────────────────────────────────────
+
+  if (src === 'MAR Fund') {
+    return {
+      mission_alignment: 1.1, strategic_fit: 0.1,
+      best_projects: ['Guardianes del Bosque (La Mosquitia)', 'Economia Circular Ajuterique'],
+      application_angle: 'MAR Fund es la convocatoria más directa para Honduras: $30k–$50k para conservación marina y costera, gestión de residuos, cambio climático y comunidades. Sustenta aplica con proyecto costero + economía circular.',
+      confidence: 'high',
+      reasoning: 'MAR Fund financia exclusivamente Honduras, Belice, Guatemala y México para el Arrecife Mesoamericano. Temas de residuos sólidos y cambio climático encajan con proyectos de Sustenta. Hasta $1,000 disponibles para ayudar a preparar propuesta.'
+    };
+  }
+
+  // ── Youth Climate Justice Fund ────────────────────────────────────────────
+
+  if (src === 'Youth Climate Justice Fund') {
+    return {
+      mission_alignment: 1.1, strategic_fit: 0.1,
+      best_projects: ['Honduras Carbono Cero / Climate Lab', 'Aire Limpio Honduras'],
+      application_angle: 'Sustenta como organización youth-led hondureña de justicia climática: monitoreo PM2.5 + economía circular + jóvenes = exactamente el perfil que busca YCJF. $20k–$40k, sin requisito de registro formal.',
+      confidence: 'high',
+      reasoning: 'YCJF financia organizaciones lideradas por jóvenes (<35) en justicia climática global. No requiere registro legal formal. Acepta solicitudes en español. Sustenta cumple todos los criterios: youth-led, LAC, trabajo climático con enfoque de justicia social.'
+    };
+  }
+
+  // ── Youth4Climate ──────────────────────────────────────────────────────────
+
+  if (src === 'Youth4Climate') {
+    return {
+      mission_alignment: 1.0, strategic_fit: 0.1,
+      best_projects: ['Honduras Carbono Cero / Climate Lab', 'Guardianes del Bosque (La Mosquitia)'],
+      application_angle: 'Sustenta aplica con líderes jóvenes (18–29) en soluciones climáticas en Honduras. Climate Lab y Guardianes del Bosque son casos concretos de soluciones climáticas comunitarias.',
+      confidence: 'high',
+      reasoning: 'Youth4Climate (PNUD + Italia) ofrece hasta $30k para organizaciones youth-led en 59 países. Honduras elegible. Sustenta encaja perfectamente: liderazgo juvenil, soluciones climáticas con dimensiones de justicia social.'
+    };
+  }
+
+  // ── Canada CFLI ────────────────────────────────────────────────────────────
+
+  if (src === 'Canada CFLI') {
+    return {
+      mission_alignment: 0.95, strategic_fit: 0.05,
+      best_projects: ['Aire Limpio Honduras', 'Economia Circular Ajuterique', 'Honduras Carbono Cero / Climate Lab'],
+      application_angle: 'Sustenta aplica como ONG local hondureña registrada con proyectos de acción climática medible: red PM2.5, economía circular, liderazgo climático juvenil. Acepta solicitudes en español.',
+      confidence: 'high',
+      reasoning: 'CFLI Honduras ofrece CAD $35k–$45k anualmente a ONGs locales registradas. Prioridades 2025 incluyen explícitamente acción climática y biodiversidad. Requiere análisis de género pero hay recursos de capacitación disponibles.'
+    };
+  }
+
+  // ── Echoing Green ──────────────────────────────────────────────────────────
+
+  if (src === 'Echoing Green') {
+    return {
+      mission_alignment: 1.0, strategic_fit: 0.05,
+      best_projects: ['Aire Limpio Honduras', 'Honduras Carbono Cero / Climate Lab'],
+      application_angle: 'Fundador(a) de Sustenta aplica como emprendedor/a social emergente en justicia climática: red PM2.5 + plataforma de datos en Honduras. $90k durante 18 meses para trabajo a tiempo completo.',
+      confidence: 'medium',
+      reasoning: 'Echoing Green apoya emprendedores sociales jóvenes en etapa temprana. El fellowship va al individuo fundador, no a la organización — pero puede canalizarse a proyectos. Alta competencia (2,000+ solicitudes, ~50 fellows). Elegibilidad global, foco en justicia climática.'
+    };
+  }
+
+  // ── MIT Solve ──────────────────────────────────────────────────────────────
+
+  if (src === 'MIT Solve') {
+    const hasClimate = /climat|environment|sustain|energy|water|forest|biodiv/i.test(text);
+    return {
+      mission_alignment: hasClimate ? 1.0 : 0.7, strategic_fit: 0.05,
+      best_projects: ['Aire Limpio Honduras', 'Honduras Carbono Cero / Climate Lab'],
+      application_angle: 'Sustenta aplica como equipo de innovación climática: red de sensores PM2.5 de bajo costo + plataforma de datos comunitaria en Honduras. MIT brinda $10k base + premios temáticos de $50k–$200k.',
+      confidence: 'medium',
+      reasoning: 'MIT Solve acepta organizaciones LAC y tiene historial de ganadores latinoamericanos. Requiere perfil de innovación tecnológica — Sustenta califica con su red de monitoreo PM2.5 como solución escalable.'
+    };
+  }
+
+  // ── Mercociudades ──────────────────────────────────────────────────────────
+
+  if (src === 'Mercociudades') {
+    if (text.includes('environment') || text.includes('climat') || text.includes('agua') || text.includes('residuo') ||
+        text.includes('joven') || text.includes('youth') || text.includes('sostenib')) {
+      return {
+        mission_alignment: 0.8, strategic_fit: 0.0,
+        best_projects: ['Red Hondurena de Municipios Verdes', 'Economia Circular Ajuterique'],
+        application_angle: null, confidence: 'medium',
+        reasoning: 'Mercociudades agrega oportunidades de UNESCO, PNUD, BID para LAC. Revisar elegibilidad directa — algunas requieren intermediación municipal.'
+      };
+    }
+    return {
+      mission_alignment: 0.4, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'medium',
+      reasoning: 'Oportunidad de Mercociudades sin alineación clara con temas de Sustenta.'
+    };
+  }
+
+  // ── HeroX ──────────────────────────────────────────────────────────────────
+
+  if (src === 'HeroX') {
+    const isEnv = /environ|climat|sustain|water|energy|air|waste|biodiv|forest|ocean|carbon|recycl/i.test(text);
+    if (isEnv) {
+      return {
+        mission_alignment: 0.75, strategic_fit: 0.0,
+        best_projects: ['Aire Limpio Honduras', 'Honduras Carbono Cero / Climate Lab'],
+        application_angle: null, confidence: 'medium',
+        reasoning: 'Desafío de innovación ambiental en HeroX. Evaluar si el alcance técnico encaja con capacidad de Sustenta y si Honduras/LAC es elegible.'
+      };
+    }
+    return {
+      mission_alignment: 0.3, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'medium',
+      reasoning: 'Desafío de innovación HeroX sin alineación temática con Sustenta.'
+    };
+  }
+
+  // ── IDB/BID ────────────────────────────────────────────────────────────────
+
+  if (src === 'IDB/BID') {
+    if (text.includes('environment') || text.includes('climate') || text.includes('water') ||
+        text.includes('waste') || text.includes('youth') || text.includes('innovation')) {
+      return {
+        mission_alignment: 0.8, strategic_fit: 0.0,
+        best_projects: ['Economia Circular Ajuterique', 'Aire Limpio Honduras', 'Red Hondurena de Municipios Verdes'],
+        application_angle: null, confidence: 'medium',
+        reasoning: 'Convocatoria BID con alineación ambiental/climática para LAC. Verificar si es accesible para ONG local o requiere intermediación de gobierno/INGO.'
+      };
+    }
+    return {
+      mission_alignment: 0.5, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'medium',
+      reasoning: 'Convocatoria BID — revisar si aplica directamente para ONGs hondureñas.'
+    };
+  }
+
+  // ── Terra Viva Grants (RSS) ────────────────────────────────────────────────
+
+  if (src === 'Terra Viva Grants') {
+    // Terra Viva covers agriculture, biodiversity, climate, energy, water in developing countries
+    const isHighAlign = /biodiv|forest|climat|air|water|sustain|conservation|Honduras|Central America|LAC/i.test(text);
+    const isGrant = /grant|fund|award|fellowship|prize|convocatoria|oportunid/i.test(text);
+
+    if (!isGrant) {
+      return {
+        mission_alignment: 0.0, strategic_fit: 0.0,
+        best_projects: [], application_angle: null, confidence: 'high',
+        reasoning: 'Noticia de Terra Viva — no es convocatoria activa.'
+      };
+    }
+    if (isHighAlign) {
+      return {
+        mission_alignment: 0.85, strategic_fit: 0.0,
+        best_projects: ['Guardianes del Bosque (La Mosquitia)', 'Economia Circular Ajuterique'],
+        application_angle: null, confidence: 'medium',
+        reasoning: 'Terra Viva lista convocatorias de biodiversidad/clima/agua para países en desarrollo. Alta relevancia para Honduras. Verificar elegibilidad específica.'
+      };
+    }
+    return {
+      mission_alignment: 0.6, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'medium',
+      reasoning: 'Convocatoria de Terra Viva — posiblemente relevante para proyectos de Sustenta. Revisar detalles.'
+    };
+  }
+
+  // ── Devex (RSS) ────────────────────────────────────────────────────────────
+
+  if (src === 'Devex News') {
+    const isGrant = /grant|fund|rfp|rfa|call for proposal|award|fellowship/i.test(text);
+    const isEnv = /environ|climat|sustain|water|biodiv|energy|forest|air quality/i.test(text);
+    const isLAC = /honduras|central america|latin america|LAC|caribbean|mesoamerica/i.test(text);
+
+    if (isGrant && isEnv && isLAC) {
+      return {
+        mission_alignment: 0.8, strategic_fit: 0.0,
+        best_projects: ['Aire Limpio Honduras', 'Honduras Carbono Cero / Climate Lab'],
+        application_angle: null, confidence: 'medium',
+        reasoning: 'Devex reporta convocatoria ambiental/climática para LAC. Revisar elegibilidad para ONG hondureña.'
+      };
+    }
+    if (isGrant && isEnv) {
+      return {
+        mission_alignment: 0.6, strategic_fit: 0.0,
+        best_projects: [], application_angle: null, confidence: 'medium',
+        reasoning: 'Devex reporta convocatoria ambiental — puede no ser específica para LAC. Revisar.'
+      };
+    }
+    return {
+      mission_alignment: 0.0, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'high',
+      reasoning: 'Artículo de noticias Devex — no es convocatoria activa o no aplica para Sustenta.'
+    };
+  }
+
+  // ── Grant & Co Partners (RSS) ─────────────────────────────────────────────
+
+  if (src === 'Grant & Co Partners') {
+    const isGrant = /grant|fund|award|fellowship|prize/i.test(text);
+    const isEnv = /environ|climat|sustain|water|biodiv|energy|forest|circular|waste/i.test(text);
+    const isYouth = /youth|young|joven/i.test(text);
+
+    if (isGrant && (isEnv || isYouth)) {
+      return {
+        mission_alignment: 0.75, strategic_fit: 0.0,
+        best_projects: ['Honduras Carbono Cero / Climate Lab', 'Economia Circular Ajuterique'],
+        application_angle: null, confidence: 'medium',
+        reasoning: 'Grant & Co Partners cura convocatorias semanales incluyendo ambiente/juventud. Revisar elegibilidad específica para Honduras.'
+      };
+    }
+    if (!isGrant) {
+      return {
+        mission_alignment: 0.0, strategic_fit: 0.0,
+        best_projects: [], application_angle: null, confidence: 'high',
+        reasoning: 'Contenido de Grant & Co Partners — no identificado como convocatoria activa.'
+      };
+    }
+    return {
+      mission_alignment: 0.5, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'medium',
+      reasoning: 'Convocatoria de Grant & Co Partners — revisar si aplica para Honduras.'
+    };
+  }
+
   // ── Bond UK ────────────────────────────────────────────────────────────────
 
   if (src === 'Bond UK') {

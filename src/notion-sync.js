@@ -1,8 +1,10 @@
 'use strict';
 /**
  * notion-sync.js
- * Pushes ALL scored grants to Notion, grouped by tier.
- * Deduplicates by URL so re-runs only add new grants.
+ * Pushes ALL scored grants to Notion.
+ * - Deduplicates by URL (re-runs only add new grants)
+ * - Adds Score Breakdown column showing per-dimension points
+ * - Writes page body with reasoning + last-scanned timestamp
  */
 
 const https = require('https');
@@ -88,19 +90,122 @@ function formatAmount(grant) {
   if (grant.amount_max && grant.amount_min) {
     return `$${Number(grant.amount_min).toLocaleString()} – $${Number(grant.amount_max).toLocaleString()}`;
   }
-  if (grant.amount_max) {
-    return `Up to $${Number(grant.amount_max).toLocaleString()}`;
-  }
-  if (grant.amount_min) {
-    return `From $${Number(grant.amount_min).toLocaleString()}`;
-  }
+  if (grant.amount_max) return `Up to $${Number(grant.amount_max).toLocaleString()}`;
+  if (grant.amount_min) return `From $${Number(grant.amount_min).toLocaleString()}`;
   return 'Amount TBD';
 }
 
+/**
+ * Builds a human-readable score breakdown string.
+ * e.g. "Geo:1.00 | Size:0.56 | DL:0.56 | Org:0.30 | Partner:0.30 | Align:1.10 | Fit:+0.10 = 3.92"
+ */
+function buildScoreBreakdown(scoring) {
+  const s = scoring.scores || {};
+  const parts = [
+    `Geo:${(s.geo            || 0).toFixed(2)}`,
+    `Size:${(s.size          || 0).toFixed(2)}`,
+    `DL:${(s.deadline        || 0).toFixed(2)}`,
+    `Org:${(s.org_type       || 0).toFixed(2)}`,
+    `Partner:${(s.partnership|| 0).toFixed(2)}`,
+    `Align:${(s.mission_alignment || 0).toFixed(2)}`,
+    `Fit:${(s.strategic_fit  >= 0 ? '+' : '')}${(s.strategic_fit || 0).toFixed(2)}`,
+  ];
+  return parts.join(' | ') + ` = ${(scoring.final_score || 0).toFixed(2)}`;
+}
+
+/**
+ * Builds the Notion page body (children blocks):
+ *   - Score Breakdown table/paragraph
+ *   - Reasoning
+ *   - Flags
+ *   - Last Scanned timestamp
+ */
+function buildPageChildren(grant, scoring) {
+  const now       = new Date();
+  const timestamp = now.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  const breakdown = buildScoreBreakdown(scoring);
+  const reasoning = scoring.reasoning || '';
+  const flags     = (scoring.flags || []).join(', ') || 'none';
+  const deadline  = grant.deadline === 'rolling'
+    ? '🔄 Rolling / No fixed deadline'
+    : (grant.deadline || 'Not found — check funder website');
+
+  const blocks = [
+    // Score breakdown
+    {
+      object: 'block', type: 'heading_3',
+      heading_3: {
+        rich_text: [{ type: 'text', text: { content: '📊 Score Breakdown' } }],
+      },
+    },
+    {
+      object: 'block', type: 'paragraph',
+      paragraph: {
+        rich_text: [{ type: 'text', text: { content: breakdown }, annotations: { code: true } }],
+      },
+    },
+  ];
+
+  // Reasoning (if present)
+  if (reasoning) {
+    blocks.push(
+      {
+        object: 'block', type: 'heading_3',
+        heading_3: { rich_text: [{ type: 'text', text: { content: '💡 Reasoning' } }] },
+      },
+      {
+        object: 'block', type: 'paragraph',
+        paragraph: { rich_text: [{ type: 'text', text: { content: reasoning.slice(0, 1500) } }] },
+      },
+    );
+  }
+
+  // Deadline clarification
+  blocks.push(
+    {
+      object: 'block', type: 'heading_3',
+      heading_3: { rich_text: [{ type: 'text', text: { content: '📅 Deadline' } }] },
+    },
+    {
+      object: 'block', type: 'paragraph',
+      paragraph: { rich_text: [{ type: 'text', text: { content: deadline } }] },
+    },
+  );
+
+  // Flags (if any non-standard)
+  if (scoring.flags && scoring.flags.length > 0) {
+    blocks.push({
+      object: 'block', type: 'callout',
+      callout: {
+        icon: { emoji: '⚠️' },
+        rich_text: [{ type: 'text', text: { content: `Flags: ${flags}` } }],
+        color: 'yellow_background',
+      },
+    });
+  }
+
+  // Divider + last scanned
+  blocks.push(
+    { object: 'block', type: 'divider', divider: {} },
+    {
+      object: 'block', type: 'paragraph',
+      paragraph: {
+        rich_text: [{
+          type: 'text',
+          text: { content: `🕐 Last scanned: ${timestamp}` },
+          annotations: { color: 'gray' },
+        }],
+      },
+    },
+  );
+
+  return blocks;
+}
+
 function buildPage(grant, scoring) {
-  const score   = scoring.final_score ?? 0;
-  const today   = new Date().toISOString().split('T')[0];
-  const amount  = formatAmount(grant);
+  const score  = scoring.final_score ?? 0;
+  const today  = new Date().toISOString().split('T')[0];
+  const amount = formatAmount(grant);
 
   let deadlineObj = null;
   if (grant.deadline && /^\d{4}-\d{2}-\d{2}$/.test(grant.deadline)) {
@@ -118,9 +223,9 @@ function buildPage(grant, scoring) {
         title: [{ text: { content: String(grant.title || 'Untitled').slice(0, 200) } }],
       },
       Score: { number: Math.round(score * 100) / 100 },
-      Tier: { select: { name: tierLabel(score) } },
+      Tier:  { select: { name: tierLabel(score) } },
       ...(deadlineObj ? { Deadline: { date: deadlineObj } } : {}),
-      URL: { url: grant.url || null },
+      URL:   { url: grant.url || null },
       Funder: {
         rich_text: [{ text: { content: String(grant.funder || '').slice(0, 200) } }],
       },
@@ -131,6 +236,9 @@ function buildPage(grant, scoring) {
         rich_text: [{ text: { content: String(grant.country || '').slice(0, 200) } }],
       },
       ...(themes.length ? { Themes: { multi_select: themes } } : {}),
+      'Score Breakdown': {
+        rich_text: [{ text: { content: buildScoreBreakdown(scoring).slice(0, 500) } }],
+      },
       'Application Angle': {
         rich_text: [{ text: { content: String(scoring.application_angle || '').slice(0, 2000) } }],
       },
@@ -140,9 +248,10 @@ function buildPage(grant, scoring) {
       Source: {
         rich_text: [{ text: { content: String(grant.source || '').slice(0, 200) } }],
       },
-      Status: { select: { name: 'New' } },
+      Status:      { select: { name: 'New' } },
       'Scan Date': { date: { start: today } },
     },
+    children: buildPageChildren(grant, scoring),
   };
 }
 
