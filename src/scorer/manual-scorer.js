@@ -9,11 +9,14 @@
 'use strict';
 
 // ── Re-usable INELIGIBLE response ─────────────────────────────────────────────
+// combineScores() in scorer/index.js checks the `_ineligible` flag to set
+// recommendation = 'INELIGIBLE' regardless of prescore flags.
 function ineligible(reason) {
   return {
     mission_alignment: 0.0, strategic_fit: -0.2,
     best_projects: [], application_angle: null, confidence: 'high',
     reasoning: reason,
+    _ineligible: true,   // ← signals combineScores() to force INELIGIBLE tier
   };
 }
 
@@ -49,8 +52,15 @@ function scoreGrant(grant) {
   }
 
   // News analysis / opinion pieces (not a grant call)
-  if (/^(how |why |what |the \w+ making |from |brazil's|china's|microfinance for|financing the|integrating peace|a key to unlock|growing interest)/i.test(grant.title)) {
+  // Note: [''] matches both straight apostrophe and Unicode curly quote (U+2019)
+  if (/^(how |why |what |the \w+ making |from |brazil['']s|china['']s|microfinance for|financing the|integrating peace|a key to unlock|growing interest)/i.test(grant.title) &&
+      !/call for|apply|deadline|open for proposals/i.test(text)) {
     return ineligible('News analysis article — not an active grant call.');
+  }
+  // RSS feed articles that "appeared first on" a publisher site
+  if (/appeared first on|this article originally appeared|read more at/i.test(grant.description || '') &&
+      !/call for|apply|deadline|submission|open for|rfp|rfa|grant opportunity/i.test(text)) {
+    return ineligible('News/blog article from RSS feed — not an active grant opportunity.');
   }
 
   // Conference/event call for submissions
@@ -69,6 +79,12 @@ function scoreGrant(grant) {
   if (grant.title && grant.title.length < 55 && (!grant.description || grant.description.length < 60) &&
       !/grant|fund|apply|call|proposal|deadline|award|opportunit/i.test(text)) {
     return ineligible('Funder name listed without a specific open call. Not actionable.');
+  }
+
+  // Known funder-name-only entries that come through ImpactFunding digest expansion
+  const FUNDER_NAMES_ONLY = /^(aberdeen group charitable trust|toyota foundation|burroughs wellcome fund|ernest kleinwort|convergence blended finance|swedish energy agency|italian agency for development|opec fund|global affairs canada|all good ventures|western indian ocean|dutch caribbean nature|unicef venture fund|international organization for migration|one young world\b)/i;
+  if (FUNDER_NAMES_ONLY.test(grant.title) && !/call for|apply|deadline|open|submission/i.test(text)) {
+    return ineligible(`"${grant.title.slice(0,50)}" is a funder listing without an open call — not actionable.`);
   }
 
   const isGestionandote = src === 'RECID';

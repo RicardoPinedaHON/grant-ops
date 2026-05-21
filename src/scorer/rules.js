@@ -36,8 +36,12 @@ const LAC_SIGNALS = /honduras|central america|latin america|latinoam[eé]rica|am
 const SCHOLARSHIP_ONLY = /\b(scholarship|beca[s]?|study grant|academic grant|travel grant|award for student|student fellowship|becas\s+para\s+estudiar|estudia en)\b/i;
 const COURSE_NOT_GRANT = /\b(curso\s+de\s|webinar\s|certificaci[oó]n[:\s]|capacitaci[oó]n\s|clase\s+de\s|online course|training course|e-learning|mooc\b)\b/i;
 const VC_ONLY          = /\b(venture capital|equity investment|seed funding for startup|startup equity|angel invest|vc fund)\b/i;
-const NEWS_ARTICLE     = /^(how |why |what |when |the \w+ making |from |brazil's|china's|microfinance for|financing the)\b/i;
+// Use ['’] to match both straight apostrophe and Unicode right single quotation mark (curly quote)
+const NEWS_ARTICLE     = /^(how |why |what |when |the \w+ making |from |brazil['’]s|china['’]s|microfinance for|financing the)\b/i;
 const CONFERENCE_EVENT = /\b(conference|summit|event|gala|forum|symposium|networking event)\b.*\b(call for|submission|abstract|speaker)\b/i;
+
+// Grants that are just funder/org names with no specific open call (expanded from digests)
+const FUNDER_NAME_ONLY = /^(aberdeen|toyota foundation|burroughs wellcome|ernest kleinwort|convergence blended|swedish energy agency|italian agency|opec fund|global affairs canada|all good ventures|western indian ocean|dutch caribbean nature|unicef venture|international organization for migration\b|iom\b)/i;
 
 // ── Hard-filter: returns flags that make grant INELIGIBLE ────────────────────
 function checkIneligibility(grant) {
@@ -70,6 +74,11 @@ function checkIneligibility(grant) {
     return ['NEWS_ARTICLE'];
   }
 
+  // 5b. Funder/org name only (common in ImpactFunding digests) — no specific open call
+  if (FUNDER_NAME_ONLY.test(title) && !/call for|apply|deadline|submission|open|RFP|RFA/i.test(text)) {
+    return ['NO_SPECIFIC_OPPORTUNITY'];
+  }
+
   // 6. Conference call for papers / event registration
   if (CONFERENCE_EVENT.test(text)) {
     return ['CONFERENCE_NOT_GRANT'];
@@ -84,6 +93,12 @@ function checkIneligibility(grant) {
     !/grant|fund|apply|call|proposal|award|deadline|opportunit/i.test(text)
   ) {
     return ['NO_SPECIFIC_OPPORTUNITY'];
+  }
+
+  // 8. News/analysis articles from RSS feeds (identified by URL pattern or "appeared first on")
+  if (/appeared first on|this article originally appeared|read more at|originally published/i.test(desc) &&
+      !/call for|apply|deadline|submission|open for|rfp|rfa|grant opportunity/i.test(text)) {
+    return ['NEWS_ARTICLE'];
   }
 
   return [];

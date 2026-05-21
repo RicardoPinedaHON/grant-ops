@@ -57,7 +57,7 @@ function combineScores(prescore, claudeResponse) {
   const finalScore = Math.min(Math.round(total * 100) / 100, 5.0);
 
   let recommendation;
-  if (prescore.flags.some(f => INELIGIBLE_FLAGS.includes(f))) {
+  if (claudeResponse._ineligible || prescore.flags.some(f => INELIGIBLE_FLAGS.includes(f))) {
     recommendation = 'INELIGIBLE';
   } else if (prescore.flags.includes('DEADLINE_TOO_CLOSE')) {
     recommendation = 'SKIP';
