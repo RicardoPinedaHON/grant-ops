@@ -8,9 +8,69 @@
 
 'use strict';
 
+// ── Re-usable INELIGIBLE response ─────────────────────────────────────────────
+function ineligible(reason) {
+  return {
+    mission_alignment: 0.0, strategic_fit: -0.2,
+    best_projects: [], application_angle: null, confidence: 'high',
+    reasoning: reason,
+  };
+}
+
+// Non-LAC country names that disqualify a grant if they appear in the title
+const NON_LAC_IN_TITLE = /\b(africa|ghana|kenya|nigeria|ethiopia|tanzania|uganda|rwanda|mozambique|angola|zambia|zimbabwe|mali|senegal|cameroon|eswatini|swaziland|malawi|botswana|south africa|kigali|nairobi|accra|india|pakistan|bangladesh|vietnam|cambodia|myanmar|indonesia|philippines|china|thailand|nepal|pacific|ukraine|moldova|albania|georgia|armenia|balkans)\b/i;
+const LAC_RESCUE       = /honduras|central america|latin america|caribbean|mesoamerica|lac\b/i;
+
 function scoreGrant(grant) {
   const text = (grant.title + ' ' + (grant.description || '')).toLowerCase();
   const src  = grant.source || '';
+
+  // ── Global pre-filter: catch things rules.js might miss ───────────────────
+
+  // Wrong geography in title — even if rules.js didn't flag it (e.g. expanded digest items)
+  if (NON_LAC_IN_TITLE.test(grant.title) && !LAC_RESCUE.test(grant.title)) {
+    return ineligible(`Grant explicitly targets non-LAC geography: "${grant.title}". Not applicable to Sustenta Honduras.`);
+  }
+
+  // CFLI entries for non-Honduras countries — come through digest expansion
+  if (/canada fund for local initiatives/i.test(grant.title) && !/honduras/i.test(grant.title)) {
+    return ineligible('Canada Fund for Local Initiatives entry is for a non-Honduras country. Sustenta is not eligible.');
+  }
+
+  // Individual scholarship / beca — not org grant
+  if (/\b(scholarship|beca[s]?\s+para\s+estudiar|estudia en|study abroad|becas\s+fundaci[oó]n)\b/i.test(text)) {
+    return ineligible('Individual scholarship — not applicable to Sustenta as an organization.');
+  }
+
+  // Course / certification / payment for course
+  if (/\b(pago\s+curso|certificaci[oó]n[:\s]|curso\s+de\s|buy.*course|inscripci[oó]n)\b/i.test(text) &&
+      !/grant|fund|award/i.test(text)) {
+    return ineligible('Course/certification fee — not a grant opportunity.');
+  }
+
+  // News analysis / opinion pieces (not a grant call)
+  if (/^(how |why |what |the \w+ making |from |brazil's|china's|microfinance for|financing the|integrating peace|a key to unlock|growing interest)/i.test(grant.title)) {
+    return ineligible('News analysis article — not an active grant call.');
+  }
+
+  // Conference/event call for submissions
+  if (/\b(ocean gala|conference|summit|gala\s+nyc|call for.*designer|call for.*artist)\b/i.test(text) &&
+      !/grant|fund|award/i.test(text)) {
+    return ineligible('Conference/event — not a grant for NGOs.');
+  }
+
+  // VC / corporate innovation — not for NGOs
+  if (/\b(venture fund|innovation hub|startup hub|vc fund|equity fund)\b/i.test(text) &&
+      !/ngo|nonprofit|civil society/i.test(text)) {
+    return ineligible('VC/startup hub — not accessible to NGOs like Sustenta.');
+  }
+
+  // Just a funder name listed with no open call (very short, no grant signal)
+  if (grant.title && grant.title.length < 55 && (!grant.description || grant.description.length < 60) &&
+      !/grant|fund|apply|call|proposal|deadline|award|opportunit/i.test(text)) {
+    return ineligible('Funder name listed without a specific open call. Not actionable.');
+  }
+
   const isGestionandote = src === 'RECID';
   const isGestion = src === 'Gestionandote' || src === 'Gestionándote';
 

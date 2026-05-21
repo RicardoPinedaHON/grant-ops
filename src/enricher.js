@@ -18,6 +18,7 @@
 const fs   = require('fs');
 const path = require('path');
 const { getPage, safeGoto, closeBrowser } = require('./scrapers/playwright-base');
+const { braveEnrichGrants } = require('./brave-search');
 
 const CACHE_FILE  = path.join(__dirname, '..', 'output', 'enrichment_cache.json');
 const CONCURRENCY = 4;
@@ -229,7 +230,11 @@ async function enrichGrants(items) {
   console.log(`\n  Enricher: resolved deadline/amount for ${found} grants; rest marked "rolling"`);
   saveCache(cache);
 
-  return applyDefaults(applyCache(items, cache));
+  // Second pass: use Brave Search for grants still missing amount data
+  const afterPlaywright = applyCache(items, cache);
+  const afterBrave = await braveEnrichGrants(afterPlaywright);
+
+  return applyDefaults(afterBrave);
 }
 
 // Apply cached values to grant objects

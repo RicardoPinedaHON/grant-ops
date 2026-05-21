@@ -10,9 +10,16 @@ const { buildScoringPrompt } = require('./prompts');
  * using its native capabilities — no API key needed.
  */
 
-const SKIP_THRESHOLD = 1.5; // Skip Claude scoring if prescore is very low
+const SKIP_THRESHOLD = 1.5;
 const RECOMMEND_THRESHOLD = 4.2;
 const CONSIDER_THRESHOLD = 3.5;
+
+// Flags that make a grant INELIGIBLE (not just Skip, a hard NO)
+const INELIGIBLE_FLAGS = [
+  'WRONG_GEOGRAPHY', 'SCHOLARSHIP_ONLY', 'COURSE_NOT_GRANT',
+  'VC_ONLY', 'NEWS_ARTICLE', 'CONFERENCE_NOT_GRANT',
+  'NO_SPECIFIC_OPPORTUNITY', 'INELIGIBLE_GEO',
+];
 
 function scoreGrantRules(grant, profile) {
   const prescore = prescoreGrant(grant, profile);
@@ -50,7 +57,9 @@ function combineScores(prescore, claudeResponse) {
   const finalScore = Math.min(Math.round(total * 100) / 100, 5.0);
 
   let recommendation;
-  if (prescore.flags.includes('INELIGIBLE_GEO') || prescore.flags.includes('DEADLINE_TOO_CLOSE')) {
+  if (prescore.flags.some(f => INELIGIBLE_FLAGS.includes(f))) {
+    recommendation = 'INELIGIBLE';
+  } else if (prescore.flags.includes('DEADLINE_TOO_CLOSE')) {
     recommendation = 'SKIP';
   } else if (finalScore >= RECOMMEND_THRESHOLD) {
     recommendation = 'APPLY_NOW';

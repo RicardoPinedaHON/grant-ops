@@ -93,14 +93,26 @@ async function getExistingURLs() {
   return urls;
 }
 
-function tierLabel(score) {
+const INELIGIBLE_FLAGS = [
+  'WRONG_GEOGRAPHY', 'SCHOLARSHIP_ONLY', 'COURSE_NOT_GRANT',
+  'VC_ONLY', 'NEWS_ARTICLE', 'CONFERENCE_NOT_GRANT',
+  'NO_SPECIFIC_OPPORTUNITY', 'INELIGIBLE_GEO',
+];
+
+function tierLabel(scoring) {
+  const score = scoring.final_score ?? 0;
+  if (scoring.recommendation === 'INELIGIBLE' ||
+      (scoring.flags || []).some(f => INELIGIBLE_FLAGS.includes(f))) return '⛔ Ineligible';
   if (score >= 4.2) return '🔥 Apply Now';
   if (score >= 3.5) return '⭐ Consider';
   if (score >= 2.8) return '👀 Monitor';
   return '⏭ Skip';
 }
 
-function tierOrder(score) {
+function tierOrder(scoring) {
+  if (scoring.recommendation === 'INELIGIBLE' ||
+      (scoring.flags || []).some(f => INELIGIBLE_FLAGS.includes(f))) return 5;
+  const score = scoring.final_score ?? 0;
   if (score >= 4.2) return 0;
   if (score >= 3.5) return 1;
   if (score >= 2.8) return 2;
@@ -260,7 +272,7 @@ function buildPage(grant, scoring) {
         title: [{ text: { content: String(grant.title || 'Untitled').slice(0, 200) } }],
       },
       Score: { number: Math.round(score * 100) / 100 },
-      Tier:  { select: { name: tierLabel(score) } },
+      Tier:  { select: { name: tierLabel(scoring) } },
       ...(deadlineObj ? { Deadline: { date: deadlineObj } } : {}),
       URL:   { url: grant.url || null },
       Funder: {
@@ -305,8 +317,8 @@ async function syncToNotion(scoredGrants) {
   const sorted = [...scoredGrants]
     .filter(g => g.scoring && g.scoring.final_score != null)
     .sort((a, b) => {
-      const ta = tierOrder(a.scoring.final_score);
-      const tb = tierOrder(b.scoring.final_score);
+      const ta = tierOrder(a.scoring);
+      const tb = tierOrder(b.scoring);
       if (ta !== tb) return ta - tb;
       return b.scoring.final_score - a.scoring.final_score;
     });
