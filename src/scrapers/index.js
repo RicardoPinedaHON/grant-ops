@@ -6,6 +6,7 @@ const { fetchSpanishAggregators }= require('./spanish-aggregators');
 const { fetchUSAIDAndGrantsGov } = require('./usaid-grantsgov');
 const { fetchFoundations }       = require('./foundations');
 const { fetchNewSources }        = require('./new-sources');
+const { fetchPortals }           = require('./portals');
 const { expandAllDigests }       = require('./digest-expander');
 const { closeBrowser }           = require('./playwright-base');
 
@@ -28,7 +29,7 @@ async function fetchAllGrants(sourcesConfig) {
   const allGrants = [];
 
   // --- API sources (parallel) ---
-  console.log('\n[1/6] Fetching API sources...');
+  console.log('\n[1/7] Fetching API sources...');
   const [reliefwebGrants, grantsGovGrants] = await Promise.allSettled([
     apis.reliefweb?.enabled ? fetchReliefWeb() : Promise.resolve([]),
     apis.grantsgov?.enabled ? fetchGrantsGov(apis.grantsgov) : Promise.resolve([]),
@@ -44,14 +45,14 @@ async function fetchAllGrants(sourcesConfig) {
   }
 
   // --- RSS feeds (parallel) ---
-  console.log('\n[2/6] Fetching RSS feeds...');
+  console.log('\n[2/7] Fetching RSS feeds...');
   const enabledRSS = (rss || []).filter(s => s.enabled);
   const rssGrants  = await fetchRSS(enabledRSS);
   console.log(`  RSS total: ${rssGrants.length} items`);
   allGrants.push(...rssGrants);
 
   // --- Playwright scrapers (sequential to avoid rate limiting) ---
-  console.log('\n[3/6] Scraping fundsforNGOs...');
+  console.log('\n[3/7] Scraping fundsforNGOs...');
   try {
     const ffnGrants = await fetchFundsForNGOs();
     console.log(`  fundsforNGOs: ${ffnGrants.length} grants`);
@@ -60,7 +61,7 @@ async function fetchAllGrants(sourcesConfig) {
     console.warn(`  fundsforNGOs failed: ${err.message}`);
   }
 
-  console.log('\n[4/6] Scraping Spanish aggregators + USAID...');
+  console.log('\n[4/7] Scraping Spanish aggregators + USAID...');
   try {
     const spanishGrants = await fetchSpanishAggregators();
     console.log(`  Spanish aggregators: ${spanishGrants.length} grants`);
@@ -77,7 +78,7 @@ async function fetchAllGrants(sourcesConfig) {
     console.warn(`  USAID/Grants.gov failed: ${err.message}`);
   }
 
-  console.log('\n[5/6] Scraping foundations (IAF, UNDP SGP, CEPF, Rainforest Trust)...');
+  console.log('\n[5/7] Scraping foundations (IAF, UNDP SGP, CEPF, Rainforest Trust)...');
   try {
     const foundationGrants = await fetchFoundations();
     console.log(`  Foundations: ${foundationGrants.length} grants`);
@@ -86,13 +87,22 @@ async function fetchAllGrants(sourcesConfig) {
     console.warn(`  Foundations failed: ${err.message}`);
   }
 
-  console.log('\n[6/6] Fetching new multi-opportunity sources (MAR Fund, HeroX, IDB, Mercociudades + static)...');
+  console.log('\n[6/7] Fetching new multi-opportunity sources (MAR Fund, HeroX, IDB, Mercociudades + static)...');
   try {
     const newGrants = await fetchNewSources();
     console.log(`  New sources: ${newGrants.length} grants`);
     allGrants.push(...newGrants);
   } catch (err) {
     console.warn(`  New sources failed: ${err.message}`);
+  }
+
+  console.log('\n[7/7] Scraping portals (WePropel, EasyGrant, Leaders of Today)...');
+  try {
+    const portalGrants = await fetchPortals();
+    console.log(`  Portals: ${portalGrants.length} grants`);
+    allGrants.push(...portalGrants);
+  } catch (err) {
+    console.warn(`  Portals failed: ${err.message}`);
   }
 
   // Expand digest/newsletter items into individual grant entries

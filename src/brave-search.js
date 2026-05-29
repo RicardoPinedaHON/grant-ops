@@ -75,6 +75,40 @@ function braveSearch(query) {
   });
 }
 
+// ── Theme keyword map ─────────────────────────────────────────────────────────
+const THEME_KEYWORDS = [
+  { pattern: /climate/i,           theme: 'Climate' },
+  { pattern: /youth/i,             theme: 'Youth-Led' },
+  { pattern: /water/i,             theme: 'Water' },
+  { pattern: /forest/i,            theme: 'Forests' },
+  { pattern: /indigenous/i,        theme: 'Indigenous Rights' },
+  { pattern: /circular\s+economy/i,theme: 'Circular Economy' },
+  { pattern: /air\s+quality/i,     theme: 'Air Quality' },
+  { pattern: /waste/i,             theme: 'Waste Management' },
+  { pattern: /biodiversity/i,      theme: 'Biodiversity' },
+  { pattern: /tech(?:nology)?/i,   theme: 'Technology' },
+];
+
+// ── Geo signal patterns ───────────────────────────────────────────────────────
+const GEO_PATS = [
+  /Honduras/i,
+  /Central\s+America/i,
+  /Latin\s+America/i,
+  /\bLAC\b/,
+  /Global/i,
+  /Africa[-\s]only/i,
+  /Africa/i,
+  /Asia/i,
+];
+
+// ── Org type signal patterns ──────────────────────────────────────────────────
+const ORG_TYPE_PATS = [
+  /local\s+NGO/i,
+  /US[-\s]based\s+only/i,
+  /northern\s+NGO\s+required/i,
+  /youth[-\s]led/i,
+];
+
 // ── Extract deadline / amount from Brave result snippets ─────────────────────
 const DATE_PATS = [
   /deadline[:\s]+([A-Za-z]+ \d{1,2},?\s*\d{4})/i,
@@ -101,7 +135,7 @@ function parseDate(str) {
 }
 
 function extractFromSnippets(snippets) {
-  const result = { deadline: null, amount_min: null, amount_max: null };
+  const result = { deadline: null, amount_min: null, amount_max: null, themes: [], geo_signal: null, org_type_signal: null };
   const today  = new Date().toISOString().split('T')[0];
   const text   = snippets.join(' ');
 
@@ -125,6 +159,25 @@ function extractFromSnippets(snippets) {
     if (!isNaN(n2) && n2 > n1) { result.amount_min = n1; result.amount_max = n2; }
     else { result.amount_max = n1; }
     break;
+  }
+
+  // Extract themes
+  const themeSet = new Set();
+  for (const { pattern, theme } of THEME_KEYWORDS) {
+    if (pattern.test(text)) themeSet.add(theme);
+  }
+  result.themes = Array.from(themeSet);
+
+  // Extract geo signal (first match wins)
+  for (const pat of GEO_PATS) {
+    const m = text.match(pat);
+    if (m) { result.geo_signal = m[0]; break; }
+  }
+
+  // Extract org type signal (first match wins)
+  for (const pat of ORG_TYPE_PATS) {
+    const m = text.match(pat);
+    if (m) { result.org_type_signal = m[0]; break; }
   }
 
   return result;
@@ -153,8 +206,9 @@ async function braveEnrichGrants(grants) {
     if (cached && Date.now() - new Date(cached.fetched_at).getTime() < TTL_MS) return false;
     const missingDeadline = !grant.deadline || grant.deadline === 'rolling';
     const missingAmount   = !grant.amount_max && !grant.amount_min;
-    // Only search if at least amount is missing (deadline 'rolling' is fine)
-    return missingAmount || (!grant.deadline);
+    const missingThemes   = !grant.themes || grant.themes.length === 0;
+    // Search if missing amount, deadline, or themes
+    return missingAmount || (!grant.deadline) || missingThemes;
   });
 
   if (needsSearch.length === 0) {
@@ -178,7 +232,7 @@ async function braveEnrichGrants(grants) {
     await sleep(DELAY_MS);
 
     if (!data?.web?.results) {
-      cache[ckey] = { deadline: null, amount_min: null, amount_max: null, fetched_at: new Date().toISOString() };
+      cache[ckey] = { deadline: null, amount_min: null, amount_max: null, themes: [], geo_signal: null, org_type_signal: null, fetched_at: new Date().toISOString() };
       continue;
     }
 
@@ -212,6 +266,8 @@ function applyBraveCache(grants, cache) {
     if (!updated.deadline && cached.deadline) updated.deadline = cached.deadline;
     if (!updated.amount_max && cached.amount_max) updated.amount_max = cached.amount_max;
     if (!updated.amount_min && cached.amount_min) updated.amount_min = cached.amount_min;
+    if (!updated.themes?.length && cached.themes?.length) updated.themes = cached.themes;
+    if (!updated.country && cached.geo_signal) updated.country = cached.geo_signal;
 
     if (item.grant !== undefined) return { ...item, grant: updated };
     return updated;
