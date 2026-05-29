@@ -1,10 +1,11 @@
 'use strict';
 /**
  * notion-sync.js
- * Pushes ALL scored grants to Notion.
- * - Deduplicates by URL (re-runs only add new grants)
- * - Adds Score Breakdown column showing per-dimension points
- * - Writes page body with reasoning + last-scanned timestamp
+ * Smart sync to Notion:
+ *  - Creates new grant pages
+ *  - PATCHes changed pages (score / tier / angle changed) instead of recreating
+ *  - Skips truly unchanged pages (fast)
+ *  - Updates database description with stats + "last scan" timestamp after every run
  */
 
 const https = require('https');
@@ -14,22 +15,22 @@ const path  = require('path');
 function loadEnv() {
   const envPath = path.join(__dirname, '..', '.env');
   if (!fs.existsSync(envPath)) return;
-  const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-  for (const line of lines) {
-    const match = line.match(/^([A-Z_]+)=(.+)$/);
-    if (match) process.env[match[1]] = match[2].trim();
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const m = line.match(/^([A-Z_]+)=(.+)$/);
+    if (m) process.env[m[1]] = m[2].trim();
   }
 }
-
 loadEnv();
 
 const TOKEN = process.env.NOTION_TOKEN;
 const DB_ID = process.env.NOTION_DB_ID;
 
+// ── Low-level HTTP ────────────────────────────────────────────────────────────
+
 function notionRequest(method, endpoint, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
-    const options = {
+    const req = https.request({
       hostname: 'api.notion.com',
       path: `/v1/${endpoint}`,
       method,
@@ -39,14 +40,10 @@ function notionRequest(method, endpoint, body) {
         'Content-Type': 'application/json',
         ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
       },
-    };
-    const req = https.request(options, res => {
+    }, res => {
       let raw = '';
-      res.on('data', chunk => raw += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(raw)); }
-        catch { resolve({ error: raw }); }
-      });
+      res.on('data', c => raw += c);
+      res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve({ error: raw }); } });
     });
     req.on('error', reject);
     if (data) req.write(data);
@@ -54,44 +51,52 @@ function notionRequest(method, endpoint, body) {
   });
 }
 
-/** Ensure the database has all required properties. Creates missing ones. */
+// ── Schema guard ──────────────────────────────────────────────────────────────
+
 async function ensureSchema() {
   const db = await notionRequest('GET', `databases/${DB_ID}`, null);
-  if (!db.properties) return; // can't verify
-
+  if (!db.properties) return;
   const existing = Object.keys(db.properties);
   const needed = {
-    'Deadline Note':   { rich_text: {} },
-    'Score Breakdown': { rich_text: {} },
+    'Deadline Note':      { rich_text: {} },
+    'Score Breakdown':    { rich_text: {} },
+    'Application Angle':  { rich_text: {} },
+    'Best Projects':      { rich_text: {} },
+    'Source':             { rich_text: {} },
+    'Competitive Fit':    { number: {} },
   };
-
   const toCreate = Object.fromEntries(
     Object.entries(needed).filter(([name]) => !existing.includes(name))
   );
-
   if (Object.keys(toCreate).length === 0) return;
-
   console.log(`   Creating missing Notion columns: ${Object.keys(toCreate).join(', ')}`);
   await notionRequest('PATCH', `databases/${DB_ID}`, { properties: toCreate });
 }
 
-async function getExistingURLs() {
-  const urls = new Set();
-  let cursor = undefined;
+// ── Fetch existing pages ──────────────────────────────────────────────────────
+// Returns Map<url, { pageId, score, tier, angle }>
+
+async function getExistingPages() {
+  const pages = new Map();
+  let cursor;
   do {
-    const body = { page_size: 100 };
-    if (cursor) body.start_cursor = cursor;
+    const body = { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) };
     const res = await notionRequest('POST', `databases/${DB_ID}/query`, body);
-    if (res.results) {
-      for (const page of res.results) {
-        const url = page.properties?.URL?.url;
-        if (url) urls.add(url);
-      }
+    for (const page of (res.results || [])) {
+      const url = page.properties?.URL?.url;
+      if (!url) continue;
+      const score = page.properties?.Score?.number ?? null;
+      const tier  = page.properties?.Tier?.select?.name ?? null;
+      const angle = page.properties?.['Application Angle']?.rich_text?.[0]?.text?.content ?? '';
+      pages.set(url, { pageId: page.id, score, tier, angle });
     }
     cursor = res.has_more ? res.next_cursor : null;
   } while (cursor);
-  return urls;
+  return pages;
 }
+
+// ── Tier helpers ──────────────────────────────────────────────────────────────
+// Use scoring.recommendation directly (stays in sync with scorer/index.js thresholds)
 
 const INELIGIBLE_FLAGS = [
   'WRONG_GEOGRAPHY', 'SCHOLARSHIP_ONLY', 'COURSE_NOT_GRANT',
@@ -100,35 +105,37 @@ const INELIGIBLE_FLAGS = [
 ];
 
 function tierLabel(scoring) {
-  const score = scoring.final_score ?? 0;
   if (scoring.recommendation === 'INELIGIBLE' ||
       (scoring.flags || []).some(f => INELIGIBLE_FLAGS.includes(f))) return '⛔ Ineligible';
-  if (score >= 4.2) return '🔥 Apply Now';
-  if (score >= 3.5) return '⭐ Consider';
-  if (score >= 2.8) return '👀 Monitor';
-  return '⏭ Skip';
+  switch (scoring.recommendation) {
+    case 'APPLY_NOW': return '🚀 Apply Now';
+    case 'CONSIDER':  return '⭐ Consider';
+    case 'MONITOR':   return '👀 Monitor';
+    default:          return '⏭ Skip';
+  }
 }
 
 function tierOrder(scoring) {
   if (scoring.recommendation === 'INELIGIBLE' ||
       (scoring.flags || []).some(f => INELIGIBLE_FLAGS.includes(f))) return 5;
-  const score = scoring.final_score ?? 0;
-  if (score >= 4.2) return 0;
-  if (score >= 3.5) return 1;
-  if (score >= 2.8) return 2;
-  return 3;
+  switch (scoring.recommendation) {
+    case 'APPLY_NOW': return 0;
+    case 'CONSIDER':  return 1;
+    case 'MONITOR':   return 2;
+    default:          return 3;
+  }
 }
 
+// ── Formatters ────────────────────────────────────────────────────────────────
+
 function formatAmount(grant) {
-  if (grant.amount_max && grant.amount_min) {
+  if (grant.amount_max && grant.amount_min)
     return `$${Number(grant.amount_min).toLocaleString()} – $${Number(grant.amount_max).toLocaleString()}`;
-  }
   if (grant.amount_max) return `Up to $${Number(grant.amount_max).toLocaleString()}`;
   if (grant.amount_min) return `From $${Number(grant.amount_min).toLocaleString()}`;
   return 'Amount TBD — see funder site';
 }
 
-/** Always-visible deadline text — never blank in Notion. */
 function formatDeadlineNote(grant) {
   const d = grant.deadline;
   if (!d || d === 'rolling') return '🔄 Rolling — open call';
@@ -144,34 +151,59 @@ function formatDeadlineNote(grant) {
   return `📅 ${d}`;
 }
 
-/**
- * Builds a human-readable score breakdown string.
- * e.g. "Geo:1.00 | Size:0.56 | DL:0.56 | Org:0.30 | Partner:0.30 | Align:1.10 | Fit:+0.10 = 3.92"
- */
 function buildScoreBreakdown(scoring) {
-  const s = scoring.scores || {};
+  const s  = scoring.scores || {};
+  const cf = s.competitive_fit;
   const parts = [
-    `Geo:${(s.geo            || 0).toFixed(2)}`,
-    `Size:${(s.size          || 0).toFixed(2)}`,
-    `DL:${(s.deadline        || 0).toFixed(2)}`,
-    `Org:${(s.org_type       || 0).toFixed(2)}`,
-    `Partner:${(s.partnership|| 0).toFixed(2)}`,
+    `Geo:${(s.geo             || 0).toFixed(2)}`,
+    `Size:${(s.size           || 0).toFixed(2)}`,
+    `DL:${(s.deadline         || 0).toFixed(2)}`,
+    `Org:${(s.org_type        || 0).toFixed(2)}`,
+    `Partner:${(s.partnership || 0).toFixed(2)}`,
     `Align:${(s.mission_alignment || 0).toFixed(2)}`,
-    `Fit:${(s.strategic_fit  >= 0 ? '+' : '')}${(s.strategic_fit || 0).toFixed(2)}`,
+    ...(cf != null ? [`Compete:${cf >= 0 ? '+' : ''}${cf.toFixed(2)}`] : []),
+    `Fit:${(s.strategic_fit >= 0 ? '+' : '')}${(s.strategic_fit || 0).toFixed(2)}`,
   ];
   return parts.join(' | ') + ` = ${(scoring.final_score || 0).toFixed(2)}`;
 }
 
-/**
- * Builds the Notion page body (children blocks):
- *   - Score Breakdown table/paragraph
- *   - Reasoning
- *   - Flags
- *   - Last Scanned timestamp
- */
+// ── Property builder (shared by create + update) ──────────────────────────────
+
+function buildProperties(grant, scoring) {
+  const score  = scoring.final_score ?? 0;
+  const today  = new Date().toISOString().split('T')[0];
+  const amount = formatAmount(grant);
+  const themes = (grant.themes || []).slice(0, 10).map(t => ({ name: String(t).slice(0, 100) }));
+
+  let deadlineObj = null;
+  if (grant.deadline && /^\d{4}-\d{2}-\d{2}$/.test(grant.deadline))
+    deadlineObj = { start: grant.deadline };
+
+  return {
+    Name:   { title: [{ text: { content: String(grant.title || 'Untitled').slice(0, 200) } }] },
+    Score:  { number: Math.round(score * 100) / 100 },
+    Tier:   { select: { name: tierLabel(scoring) } },
+    ...(deadlineObj ? { Deadline: { date: deadlineObj } } : {}),
+    URL:    { url: grant.url || null },
+    Funder: { rich_text: [{ text: { content: String(grant.funder || '').slice(0, 200) } }] },
+    Amount: { rich_text: [{ text: { content: amount } }] },
+    Country:{ rich_text: [{ text: { content: String(grant.country || '').slice(0, 200) } }] },
+    ...(themes.length ? { Themes: { multi_select: themes } } : {}),
+    'Deadline Note':     { rich_text: [{ text: { content: formatDeadlineNote(grant) } }] },
+    'Score Breakdown':   { rich_text: [{ text: { content: buildScoreBreakdown(scoring).slice(0, 500) } }] },
+    'Application Angle': { rich_text: [{ text: { content: String(scoring.application_angle || '').slice(0, 2000) } }] },
+    'Best Projects':     { rich_text: [{ text: { content: (scoring.best_projects || []).join(', ').slice(0, 500) } }] },
+    Source:              { rich_text: [{ text: { content: String(grant.source || '').slice(0, 200) } }] },
+    'Competitive Fit':   { number: Math.round((scoring.scores?.competitive_fit ?? 0) * 100) / 100 },
+    Status:      { select: { name: 'New' } },
+    'Scan Date': { date: { start: today } },
+  };
+}
+
+// ── Page body blocks (used only on first create) ──────────────────────────────
+
 function buildPageChildren(grant, scoring) {
-  const now       = new Date();
-  const timestamp = now.toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
   const breakdown = buildScoreBreakdown(scoring);
   const reasoning = scoring.reasoning || '';
   const flags     = (scoring.flags || []).join(', ') || 'none';
@@ -180,12 +212,9 @@ function buildPageChildren(grant, scoring) {
     : (grant.deadline || 'Not found — check funder website');
 
   const blocks = [
-    // Score breakdown
     {
       object: 'block', type: 'heading_3',
-      heading_3: {
-        rich_text: [{ type: 'text', text: { content: '📊 Score Breakdown' } }],
-      },
+      heading_3: { rich_text: [{ type: 'text', text: { content: '📊 Score Breakdown' } }] },
     },
     {
       object: 'block', type: 'paragraph',
@@ -195,12 +224,11 @@ function buildPageChildren(grant, scoring) {
     },
   ];
 
-  // Reasoning (if present)
   if (reasoning) {
     blocks.push(
       {
         object: 'block', type: 'heading_3',
-        heading_3: { rich_text: [{ type: 'text', text: { content: '💡 Reasoning' } }] },
+        heading_3: { rich_text: [{ type: 'text', text: { content: '💡 Analysis' } }] },
       },
       {
         object: 'block', type: 'paragraph',
@@ -209,7 +237,6 @@ function buildPageChildren(grant, scoring) {
     );
   }
 
-  // Deadline clarification
   blocks.push(
     {
       object: 'block', type: 'heading_3',
@@ -221,7 +248,6 @@ function buildPageChildren(grant, scoring) {
     },
   );
 
-  // Flags (if any non-standard)
   if (scoring.flags && scoring.flags.length > 0) {
     blocks.push({
       object: 'block', type: 'callout',
@@ -233,7 +259,6 @@ function buildPageChildren(grant, scoring) {
     });
   }
 
-  // Divider + last scanned
   blocks.push(
     { object: 'block', type: 'divider', divider: {} },
     {
@@ -241,7 +266,7 @@ function buildPageChildren(grant, scoring) {
       paragraph: {
         rich_text: [{
           type: 'text',
-          text: { content: `🕐 Last scanned: ${timestamp}` },
+          text: { content: `🕐 First added: ${timestamp}` },
           annotations: { color: 'gray' },
         }],
       },
@@ -251,61 +276,67 @@ function buildPageChildren(grant, scoring) {
   return blocks;
 }
 
-function buildPage(grant, scoring) {
-  const score  = scoring.final_score ?? 0;
-  const today  = new Date().toISOString().split('T')[0];
-  const amount = formatAmount(grant);
+// ── Decide whether an existing page needs updating ───────────────────────────
 
-  let deadlineObj = null;
-  if (grant.deadline && /^\d{4}-\d{2}-\d{2}$/.test(grant.deadline)) {
-    deadlineObj = { start: grant.deadline };
-  }
-
-  const themes = (grant.themes || []).slice(0, 10).map(t => ({
-    name: String(t).slice(0, 100),
-  }));
-
-  return {
-    parent: { database_id: DB_ID },
-    properties: {
-      Name: {
-        title: [{ text: { content: String(grant.title || 'Untitled').slice(0, 200) } }],
-      },
-      Score: { number: Math.round(score * 100) / 100 },
-      Tier:  { select: { name: tierLabel(scoring) } },
-      ...(deadlineObj ? { Deadline: { date: deadlineObj } } : {}),
-      URL:   { url: grant.url || null },
-      Funder: {
-        rich_text: [{ text: { content: String(grant.funder || '').slice(0, 200) } }],
-      },
-      Amount: {
-        rich_text: [{ text: { content: amount } }],
-      },
-      Country: {
-        rich_text: [{ text: { content: String(grant.country || '').slice(0, 200) } }],
-      },
-      ...(themes.length ? { Themes: { multi_select: themes } } : {}),
-      'Deadline Note': {
-        rich_text: [{ text: { content: formatDeadlineNote(grant) } }],
-      },
-      'Score Breakdown': {
-        rich_text: [{ text: { content: buildScoreBreakdown(scoring).slice(0, 500) } }],
-      },
-      'Application Angle': {
-        rich_text: [{ text: { content: String(scoring.application_angle || '').slice(0, 2000) } }],
-      },
-      'Best Projects': {
-        rich_text: [{ text: { content: (scoring.best_projects || []).join(', ').slice(0, 500) } }],
-      },
-      Source: {
-        rich_text: [{ text: { content: String(grant.source || '').slice(0, 200) } }],
-      },
-      Status:      { select: { name: 'New' } },
-      'Scan Date': { date: { start: today } },
-    },
-    children: buildPageChildren(grant, scoring),
-  };
+function shouldUpdate(existing, scoring) {
+  const newTier  = tierLabel(scoring);
+  const newScore = scoring.final_score ?? 0;
+  const newAngle = scoring.application_angle || '';
+  if (existing.tier  !== newTier)                         return true;
+  if (Math.abs((existing.score || 0) - newScore) > 0.05)  return true;
+  if ((existing.angle || '') !== newAngle)                return true;
+  return false;
 }
+
+// ── Update existing page: PATCH properties + append rescore note ──────────────
+
+async function updatePage(pageId, grant, scoring) {
+  await notionRequest('PATCH', `pages/${pageId}`, { properties: buildProperties(grant, scoring) });
+
+  const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+  const note = `Re-scored ${timestamp} → ${tierLabel(scoring)} (${(scoring.final_score||0).toFixed(2)}). ${(scoring.reasoning || '').slice(0, 300)}`;
+  await notionRequest('PATCH', `blocks/${pageId}/children`, {
+    children: [{
+      object: 'block', type: 'callout',
+      callout: {
+        icon: { emoji: '🔄' },
+        rich_text: [{ type: 'text', text: { content: note.slice(0, 600) } }],
+        color: 'blue_background',
+      },
+    }],
+  });
+}
+
+// ── Update database description with scan stats ───────────────────────────────
+
+async function updateDatabaseMeta(scoredGrants, newCount, updatedCount) {
+  const total      = scoredGrants.filter(g => g.scoring?.final_score != null).length;
+  const applyNow   = scoredGrants.filter(g => g.scoring?.recommendation === 'APPLY_NOW').length;
+  const consider   = scoredGrants.filter(g => g.scoring?.recommendation === 'CONSIDER').length;
+  const monitor    = scoredGrants.filter(g => g.scoring?.recommendation === 'MONITOR').length;
+  const ineligible = scoredGrants.filter(g => g.scoring?.recommendation === 'INELIGIBLE').length;
+  const skip       = scoredGrants.filter(g => g.scoring?.recommendation === 'SKIP').length;
+
+  const dateStr = new Date().toLocaleDateString('en-US', {
+    month: 'long', day: 'numeric', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+    timeZone: 'America/Tegucigalpa',
+  });
+
+  const deltaStr = [
+    newCount     > 0 ? `+${newCount} new`         : '',
+    updatedCount > 0 ? `${updatedCount} re-scored` : '',
+  ].filter(Boolean).join('  ·  ');
+
+  const line1 = `🕐 Last scan: ${dateStr} (Honduras time)${deltaStr ? '   ·   ' + deltaStr : ''}`;
+  const line2 = `📊 ${total} analyzed   🚀 ${applyNow} Apply Now   ⭐ ${consider} Consider   👀 ${monitor} Monitor   ⏭ ${skip} Skip   ⛔ ${ineligible} Ineligible`;
+
+  await notionRequest('PATCH', `databases/${DB_ID}`, {
+    description: [{ type: 'text', text: { content: line1 + '\n' + line2 } }],
+  });
+}
+
+// ── Main entry point ──────────────────────────────────────────────────────────
 
 async function syncToNotion(scoredGrants) {
   if (!TOKEN || !DB_ID) {
@@ -313,56 +344,73 @@ async function syncToNotion(scoredGrants) {
     return;
   }
 
-  // Sort: tier first, then score descending within tier
   const sorted = [...scoredGrants]
     .filter(g => g.scoring && g.scoring.final_score != null)
     .sort((a, b) => {
-      const ta = tierOrder(a.scoring);
-      const tb = tierOrder(b.scoring);
-      if (ta !== tb) return ta - tb;
-      return b.scoring.final_score - a.scoring.final_score;
+      const ta = tierOrder(a.scoring), tb = tierOrder(b.scoring);
+      return ta !== tb ? ta - tb : b.scoring.final_score - a.scoring.final_score;
     });
 
   console.log(`\n📋 Notion sync — ${sorted.length} grants (all tiers)...`);
 
   await ensureSchema();
-  const existing = await getExistingURLs();
-  console.log(`   ${existing.size} already in Notion, skipping duplicates`);
+  const existing = await getExistingPages();
 
-  let added = 0, skipped = 0, errors = 0;
+  const genuinelyNew = sorted.filter(g => g.grant?.url && !existing.has(g.grant.url)).length;
+  console.log(`   ${existing.size} in Notion now  ·  ${genuinelyNew} new candidates`);
+
+  let added = 0, updated = 0, skipped = 0, errors = 0;
 
   for (const { grant, scoring } of sorted) {
-    if (grant.url && existing.has(grant.url)) {
+    const existingPage = grant.url ? existing.get(grant.url) : null;
+
+    if (!existingPage) {
+      // ── New grant: create ──
+      try {
+        const res = await notionRequest('POST', 'pages', {
+          parent: { database_id: DB_ID },
+          properties: buildProperties(grant, scoring),
+          children: buildPageChildren(grant, scoring),
+        });
+        if (res.id) { added++; process.stdout.write('+'); }
+        else { errors++; if (res.message) console.error(`\n   ✗ create "${grant.title}": ${res.message}`); }
+      } catch (err) { errors++; console.error(`\n   ✗ create "${grant.title}": ${err.message}`); }
+
+    } else if (shouldUpdate(existingPage, scoring)) {
+      // ── Changed: update ──
+      try {
+        await updatePage(existingPage.pageId, grant, scoring);
+        updated++; process.stdout.write('~');
+      } catch (err) { errors++; console.error(`\n   ✗ update "${grant.title}": ${err.message}`); }
+
+    } else {
+      // ── Unchanged: skip ──
       skipped++;
-      continue;
-    }
-    try {
-      const res = await notionRequest('POST', 'pages', buildPage(grant, scoring));
-      if (res.id) {
-        added++;
-        process.stdout.write('.');
-      } else {
-        errors++;
-        if (res.message) console.error(`\n   Error on "${grant.title}": ${res.message}`);
-      }
-    } catch (err) {
-      errors++;
-      console.error(`\n   Error on "${grant.title}": ${err.message}`);
     }
   }
 
-  console.log(`\n   ✅ Added ${added} new | ${skipped} already existed | ${errors} errors`);
-  if (added > 0) {
+  console.log(`\n   ✅ ${added} new  ·  ${updated} re-scored  ·  ${skipped} unchanged  ·  ${errors} errors`);
+
+  // Update the database header description with fresh stats
+  try {
+    await updateDatabaseMeta(sorted, added, updated);
+    console.log(`   📊 Database stats header updated`);
+  } catch (err) {
+    console.error(`   ⚠  Could not update DB description: ${err.message}`);
+  }
+
+  if (added > 0 || updated > 0) {
     console.log(`   🔗 https://www.notion.so/${DB_ID.replace(/-/g, '')}`);
   }
 }
 
 module.exports = { syncToNotion };
 
+// Allow running standalone: node src/notion-sync.js
 if (require.main === module) {
   const SCORED = path.join(__dirname, '..', 'output', 'grants_scored.json');
   if (!fs.existsSync(SCORED)) {
-    console.error('No grants_scored.json found. Run: grant-ops run first.');
+    console.error('No grants_scored.json found. Run scan + scoring first.');
     process.exit(1);
   }
   const scored = JSON.parse(fs.readFileSync(SCORED, 'utf8'));
