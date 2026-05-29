@@ -11,8 +11,11 @@ const { buildScoringPrompt } = require('./prompts');
  */
 
 const SKIP_THRESHOLD = 1.5;
-const RECOMMEND_THRESHOLD = 4.2;
-const CONSIDER_THRESHOLD = 3.5;
+// Recalibrated after adding competitive_fit (-0.5 to 0.0) dimension.
+// competitive_fit brings max possible from ~4.5 → 4.0 for well-matched grants.
+// A grant needs both strong thematic alignment AND realistic win probability for APPLY_NOW.
+const RECOMMEND_THRESHOLD = 3.8;
+const CONSIDER_THRESHOLD = 3.2;
 
 // Flags that make a grant INELIGIBLE (not just Skip, a hard NO)
 const INELIGIBLE_FLAGS = [
@@ -52,8 +55,9 @@ function buildPromptForClaude(grant, profile) {
 
 function combineScores(prescore, claudeResponse) {
   const missionAlignment = claudeResponse.mission_alignment || 0;
+  const competitiveFit = claudeResponse.competitive_fit ?? 0; // -0.5 to 0.0
   const strategicFit = claudeResponse.strategic_fit || 0;
-  const total = prescore.prescore + missionAlignment + strategicFit;
+  const total = prescore.prescore + missionAlignment + competitiveFit + strategicFit;
   const finalScore = Math.min(Math.round(total * 100) / 100, 5.0);
 
   let recommendation;
@@ -65,7 +69,7 @@ function combineScores(prescore, claudeResponse) {
     recommendation = 'APPLY_NOW';
   } else if (finalScore >= CONSIDER_THRESHOLD) {
     recommendation = 'CONSIDER';
-  } else if (finalScore >= 2.8) {
+  } else if (finalScore >= 2.5) {
     recommendation = 'MONITOR';
   } else {
     recommendation = 'SKIP';
@@ -77,6 +81,7 @@ function combineScores(prescore, claudeResponse) {
     scores: {
       ...prescore.scores,
       mission_alignment: missionAlignment,
+      competitive_fit: competitiveFit,
       strategic_fit: strategicFit,
     },
     flags: prescore.flags,

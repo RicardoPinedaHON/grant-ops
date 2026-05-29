@@ -336,12 +336,17 @@ function scoreGrant(grant) {
   // ── MAR Fund ──────────────────────────────────────────────────────────────
 
   if (src === 'MAR Fund') {
+    // MAR Fund requires coastal/marine conservation experience.
+    // Sustenta has ZERO coastal portfolio — inland/urban projects only.
+    // Would compete against actual marine biology organizations. Honest score: MONITOR.
     return {
-      mission_alignment: 1.1, strategic_fit: 0.1,
-      best_projects: ['Guardianes del Bosque (La Mosquitia)', 'Economia Circular Ajuterique'],
-      application_angle: 'MAR Fund es la convocatoria más directa para Honduras: $30k–$50k para conservación marina y costera, gestión de residuos, cambio climático y comunidades. Sustenta aplica con proyecto costero + economía circular.',
+      mission_alignment: 0.5,  // Honduras geography matches, but reef/coastal ≠ Sustenta's work
+      competitive_fit: -0.4,   // No coastal/marine portfolio — major technical domain gap
+      strategic_fit: 0.0,
+      best_projects: ['Economia Circular Ajuterique'],  // only if waste→coastal angle is framed
+      application_angle: null,
       confidence: 'high',
-      reasoning: 'MAR Fund financia exclusivamente Honduras, Belice, Guatemala y México para el Arrecife Mesoamericano. Temas de residuos sólidos y cambio climático encajan con proyectos de Sustenta. Hasta $1,000 disponibles para ayudar a preparar propuesta.'
+      reasoning: 'MAR Fund explicitly requires coastal and marine conservation experience. Sustenta has NO coastal portfolio — all projects are inland (Tegucigalpa, Ajuterique, La Mosquitia interior). Would compete against actual marine conservation NGOs with reef expertise. Only viable if partnered with a coastal organization as technical lead.'
     };
   }
 
@@ -385,11 +390,13 @@ function scoreGrant(grant) {
 
   if (src === 'Echoing Green') {
     return {
-      mission_alignment: 1.0, strategic_fit: 0.05,
+      mission_alignment: 0.9,
+      competitive_fit: -0.15,  // High competition (2000+ applicants, ~50 fellows), bias toward already-networked candidates
+      strategic_fit: 0.05,
       best_projects: ['Aire Limpio Honduras', 'Honduras Carbono Cero / Climate Lab'],
-      application_angle: 'Fundador(a) de Sustenta aplica como emprendedor/a social emergente en justicia climática: red PM2.5 + plataforma de datos en Honduras. $90k durante 18 meses para trabajo a tiempo completo.',
+      application_angle: 'Fundador(a) de Sustenta aplica como emprendedor/a social emergente en justicia climática: red PM2.5 + plataforma de datos en Honduras. $90k durante 18 meses.',
       confidence: 'medium',
-      reasoning: 'Echoing Green apoya emprendedores sociales jóvenes en etapa temprana. El fellowship va al individuo fundador, no a la organización — pero puede canalizarse a proyectos. Alta competencia (2,000+ solicitudes, ~50 fellows). Elegibilidad global, foco en justicia climática.'
+      reasoning: 'Echoing Green apoya emprendedores sociales jóvenes. Thematic fit is strong, but 2,000+ applicants with ~50 fellows selected, and strong institutional bias toward candidates with US/global network presence. Strong angle possible but realistic odds are moderate.'
     };
   }
 
@@ -398,11 +405,13 @@ function scoreGrant(grant) {
   if (src === 'MIT Solve') {
     const hasClimate = /climat|environment|sustain|energy|water|forest|biodiv/i.test(text);
     return {
-      mission_alignment: hasClimate ? 1.0 : 0.7, strategic_fit: 0.05,
-      best_projects: ['Aire Limpio Honduras', 'Honduras Carbono Cero / Climate Lab'],
-      application_angle: 'Sustenta aplica como equipo de innovación climática: red de sensores PM2.5 de bajo costo + plataforma de datos comunitaria en Honduras. MIT brinda $10k base + premios temáticos de $50k–$200k.',
+      mission_alignment: hasClimate ? 0.8 : 0.5,
+      competitive_fit: -0.3,  // Solve rewards packaged scalable innovations, not organizations. Sustenta = 13 people, $51K max grant — doesn't look like a Solve finalist profile.
+      strategic_fit: 0.0,
+      best_projects: ['Aire Limpio Honduras'],
+      application_angle: null,
       confidence: 'medium',
-      reasoning: 'MIT Solve acepta organizaciones LAC y tiene historial de ganadores latinoamericanos. Requiere perfil de innovación tecnológica — Sustenta califica con su red de monitoreo PM2.5 como solución escalable.'
+      reasoning: 'MIT Solve needs innovations packaged as scalable, replicable solutions with clear reach-millions potential. Sustenta is a strong org but looks more like a "good local organization" than a Solve-native innovation vehicle. Air quality sensor network is the strongest angle but evidence architecture is weak by Solve standards. Uphill.'
     };
   }
 
@@ -596,6 +605,76 @@ function scoreGrant(grant) {
       best_projects: [], application_angle: null, confidence: 'high',
       reasoning: 'IFAD financia proyectos agrícolas con pequeños productores — fuera del foco de Sustenta.'
     };
+  }
+
+  // ── General competitive_fit penalty detectors ─────────────────────────────
+  // Apply before digest scoring and fallback so they affect ALL unmatched grants.
+
+  // MARINE / COASTAL / REEF — Sustenta has zero coastal portfolio
+  const IS_MARINE = /\b(coral reef|reef conservation|marine|coastal|fisheries|mangrove|ocean|arrecife|marino|costero|pesquer)/i;
+  if (IS_MARINE.test(text)) {
+    // Pass through to be scored but inject competitive_fit penalty
+    const marineResult = grant._from_digest ? scoreExpandedGrant(grant, text) : {
+      mission_alignment: 0.5, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'medium',
+      reasoning: 'Marine/coastal grant — Sustenta has no coastal portfolio and would compete against actual marine conservation organizations.',
+    };
+    marineResult.competitive_fit = -0.4;
+    marineResult.application_angle = null;
+    marineResult.reasoning = 'Marine/coastal focus: Sustenta has NO coastal or reef portfolio (all projects are inland). Would compete against specialized marine biology organizations. Only viable as partner, not lead. ' + (marineResult.reasoning || '');
+    return marineResult;
+  }
+
+  // SCALE-EVIDENCE FUNDS (DIV, GIF) — need RCTs, cost-effectiveness, path to millions
+  const IS_SCALE_EVIDENCE = /\b(development innovation ventures|div fund|global innovation fund|gif fund|usaid div|evidence of impact at scale|reach millions|cost.effectiveness|unit cost|rct|randomized)\b/i;
+  if (IS_SCALE_EVIDENCE.test(text)) {
+    const result = grant._from_digest ? scoreExpandedGrant(grant, text) : {
+      mission_alignment: 0.7, strategic_fit: 0.0,
+      best_projects: ['Economia Circular Ajuterique'], application_angle: null, confidence: 'medium',
+      reasoning: 'Scale-evidence fund requires RCTs, cost-effectiveness data, and pathway to reach hundreds of thousands of people.',
+    };
+    result.competitive_fit = -0.35;
+    result.application_angle = null;
+    result.reasoning = 'Evidence-at-scale fund: Sustenta is 13 people with $51K max grant — structurally not matching DIV/GIF typical grantee profile which expects proof of scale, unit cost data, and institutional adoption routes. Only Stage 1/Pilot track could fit with Ajuterique. ' + (result.reasoning || '');
+    return result;
+  }
+
+  // AGRIFOOD / COMMERCIAL SUPPLY CHAIN
+  const IS_AGRIFOOD = /\b(agrifood|supply chain|traceability|commodity|smallholder.*producer|value chain|agribusiness|gafsp|due diligence fund)\b/i;
+  if (IS_AGRIFOOD.test(text)) {
+    const result = grant._from_digest ? scoreExpandedGrant(grant, text) : {
+      mission_alignment: 0.3, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'medium',
+      reasoning: 'Agrifood/supply chain fund — outside Sustenta\'s domain.',
+    };
+    result.competitive_fit = -0.4;
+    result.application_angle = null;
+    return result;
+  }
+
+  // US PUBLIC DIPLOMACY (Embassy PDS) — must center US-Honduras collaboration
+  const IS_PDS = /\b(public diplomacy|pds|embassy.*grant|diplomatic.*section|american.*element|u\.?s\.?.*diplomacy)\b/i;
+  if (IS_PDS.test(text)) {
+    const result = grant._from_digest ? scoreExpandedGrant(grant, text) : {
+      mission_alignment: 0.6, strategic_fit: 0.0,
+      best_projects: ['Aire Limpio Honduras'], application_angle: null, confidence: 'medium',
+      reasoning: 'US Embassy PDS requires a visible U.S. element — generic climate proposal would be weak.',
+    };
+    result.competitive_fit = -0.2;
+    return result;
+  }
+
+  // INTERNET CONNECTIVITY / INFRASTRUCTURE
+  const IS_CONNECTIVITY = /\b(internet.*infrastructure|community network|wireless deployment|isp|connectivity.*operator|internet.*access.*deploy)\b/i;
+  if (IS_CONNECTIVITY.test(text)) {
+    const result = grant._from_digest ? scoreExpandedGrant(grant, text) : {
+      mission_alignment: 0.2, strategic_fit: 0.0,
+      best_projects: [], application_angle: null, confidence: 'high',
+      reasoning: 'Internet infrastructure fund — Sustenta has no connectivity deployment experience.',
+    };
+    result.competitive_fit = -0.4;
+    result.application_angle = null;
+    return result;
   }
 
   // ── Expanded ImpactFunding individual grants: score by content ─────────────

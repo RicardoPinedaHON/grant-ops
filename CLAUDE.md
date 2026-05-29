@@ -37,11 +37,12 @@ After running scan.js, load `output/grants_prescored.json`. For each item:
    ```json
    {
      "mission_alignment": 0.0-1.2,
+     "competitive_fit": -0.5 to 0.0,
      "strategic_fit": -0.2 to 0.1,
      "best_projects": ["project name"],
      "application_angle": "one sentence or null",
      "confidence": "high|medium|low",
-     "reasoning": "2-3 sentences"
+     "reasoning": "2-3 sentences: what specifically helps AND hurts"
    }
    ```
 4. Use `combineScores(item.prescore, yourResponse)` from `src/scorer/index.js`
@@ -57,21 +58,35 @@ The NGO (Sustenta Honduras) focuses on:
 - **Youth climate leadership** — youth-led research, decarbonization strategy
 - **Water governance** — municipal networks, watershed management
 
-**Apply strong scores (≥1.0 mission alignment) when:**
-- Grant explicitly funds environmental monitoring, climate data, or air quality
-- Grant targets youth-led organizations in LAC/Central America
-- Grant supports indigenous community rights + environmental defense
-- Grant funds circular economy or green jobs in developing countries
+### The most important rule: theme match ≠ competitive fit
 
-**Apply moderate scores (0.6–0.9) when:**
-- Grant is broad climate/environment but not specifically monitoring/youth
+A grant can be thematically related but structurally wrong. Always ask:
+**"Who actually wins this grant, and does Sustenta look like that organization?"**
+
+**Apply strong mission scores (≥1.0) AND competitive_fit 0.0 when:**
+- Grant explicitly funds air quality monitoring, PM2.5, environmental data networks
+- Grant explicitly targets youth-led organizations in LAC/Honduras — Sustenta qualifies as youth-led
+- Grant supports indigenous community rights + environmental defenders in Mesoamerica
+- Grant funds circular economy or green jobs in developing countries (small NGO track)
+- Funder is already in Sustenta's network (SIDA, EU, UNDP, embassies) — prior relationship = advantage
+
+**Apply moderate mission scores (0.6–0.9) when:**
+- Grant is broad climate/environment, not specifically monitoring/youth
 - Grant is development-focused with clear environmental component
-- Funder is already in Sustenta's network (SIDA, EU, UNDP, embassies)
 
-**Downgrade when:**
-- Grant is US-domestic only or requires US-based lead organization
-- Grant requires >15% matching funds (org capacity limit)
-- Application window is <15 days away
+**competitive_fit penalties — apply these hard:**
+- **-0.5 (MAR Fund, reef/coastal funds):** Grant requires coastal/marine/reef conservation experience. Sustenta has NO coastal portfolio. Would compete against actual marine biology organizations.
+- **-0.35 to -0.4 (DIV, GIF, MIT Solve, innovation scale funds):** Funder requires proven scale (reaching thousands+), RCTs, cost-effectiveness data, or "innovation packaging." Sustenta is 13 people with $51K max grant — structurally not this profile.
+- **-0.35 (AECID, Spanish cooperation as lead):** Structural barrier — requires Spanish ONGD registration. Sustenta can only be local partner, not lead applicant.
+- **-0.3 (agrifood/commercial supply chain funds):** GAFSP, DDF, commodity traceability programs favor commercial agribusiness actors. Not Sustenta's world.
+- **-0.2 (US Embassy PDS / public diplomacy):** Only fits if the proposal centers a visible U.S.-Honduras collaboration element. Generic climate proposal would be weak.
+- **-0.2 (large institutional calls >$500K needing consortium):** Sustenta can participate but needs a strong lead partner — downgrade solo application scoring.
+
+**strategic_fit adjustments:**
+- +0.1 if funder already in previous_funders list
+- +0.05 if call explicitly targets small NGOs or youth-led organizations
+- -0.1 if matching funds required >15%
+- -0.1 if grant is highly competitive with strong institutional bias (Solve, Echoing Green — hundreds of applicants, bias toward established names)
 
 ## File locations
 
