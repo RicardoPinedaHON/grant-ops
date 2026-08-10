@@ -11,6 +11,7 @@
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
+const { grantFingerprint } = require('./utils/grant-fingerprint');
 
 function loadEnv() {
   const envPath = path.join(__dirname, '..', '.env');
@@ -34,6 +35,12 @@ function notionRequest(method, endpoint, body) {
       hostname: 'api.notion.com',
       path: `/v1/${endpoint}`,
       method,
+      // agent: false — without this, Node's default keep-alive HTTPS agent
+      // holds the socket open after the response, keeping the event loop
+      // alive so the process never exits on its own (observed: `node
+      // src/cli.js run` finishing all real work but hanging indefinitely
+      // instead of returning, stalling the scan -> score -> expand chain).
+      agent: false,
       headers: {
         'Authorization': `Bearer ${TOKEN}`,
         'Notion-Version': '2022-06-28',
@@ -64,6 +71,20 @@ async function ensureSchema() {
     'Best Projects':      { rich_text: {} },
     'Source':             { rich_text: {} },
     'Competitive Fit':    { number: {} },
+    // Identity key for dedup — grants without a usable URL (roundup posts,
+    // digest-expanded items) used to always look "new" and get re-created
+    // every sync. Falls back to grantFingerprint() the same way history.json
+    // dedup already does elsewhere in this project.
+    'Fingerprint':        { rich_text: {} },
+    // Deep-research fields (src/deep-research.js). "Deep Researched" doubles
+    // as the visible "this was written/updated by the AI research subagent"
+    // marker, since deep research is currently the only thing that sets it.
+    'Deep Researched':    { checkbox: {} },
+    'Likelihood %':       { number: {} },
+    'Research Status':    { select: { options: [
+      { name: 'Open' }, { name: 'Closed' }, { name: 'Could not confirm' },
+    ] } },
+    'Research Summary':   { rich_text: {} },
   };
   const toCreate = Object.fromEntries(
     Object.entries(needed).filter(([name]) => !existing.includes(name))
@@ -74,7 +95,10 @@ async function ensureSchema() {
 }
 
 // ── Fetch existing pages ──────────────────────────────────────────────────────
-// Returns Map<url, { pageId, score, tier, angle }>
+// Returns Map<identityKey, { pageId, score, tier, angle }>. identityKey is
+// the grant's Fingerprint when present (the stable cross-run identity used
+// everywhere else in this project), falling back to URL for older pages
+// synced before the Fingerprint column existed.
 
 async function getExistingPages() {
   const pages = new Map();
@@ -83,16 +107,28 @@ async function getExistingPages() {
     const body = { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) };
     const res = await notionRequest('POST', `databases/${DB_ID}/query`, body);
     for (const page of (res.results || [])) {
-      const url = page.properties?.URL?.url;
-      if (!url) continue;
+      const fingerprint = page.properties?.Fingerprint?.rich_text?.[0]?.text?.content || '';
+      const url = page.properties?.URL?.url || '';
+      const key = fingerprint || url;
+      if (!key) continue;
       const score = page.properties?.Score?.number ?? null;
       const tier  = page.properties?.Tier?.select?.name ?? null;
       const angle = page.properties?.['Application Angle']?.rich_text?.[0]?.text?.content ?? '';
-      pages.set(url, { pageId: page.id, score, tier, angle });
+      const researched = page.properties?.['Deep Researched']?.checkbox ?? false;
+      // If both a fingerprint-keyed and url-keyed lookup could find this page,
+      // register it under both so identityKeyFor() matches either way.
+      const entry = { pageId: page.id, score, tier, angle, researched };
+      pages.set(key, entry);
+      if (fingerprint && url) pages.set(url, entry);
     }
     cursor = res.has_more ? res.next_cursor : null;
   } while (cursor);
   return pages;
+}
+
+function identityKeyFor(grant) {
+  const fp = grantFingerprint(grant);
+  return (fp && fp.length > 3) ? fp : (grant.url || null);
 }
 
 // ── Tier helpers ──────────────────────────────────────────────────────────────
@@ -104,10 +140,19 @@ const INELIGIBLE_FLAGS = [
   'NO_SPECIFIC_OPPORTUNITY', 'INELIGIBLE_GEO',
 ];
 
-function tierLabel(scoring) {
-  if (scoring.recommendation === 'INELIGIBLE' ||
+// Deep research (src/deep-research.js) is more authoritative than the
+// surface-level rule+Claude score — it actually checked the funder's live
+// page, past grantees, and current open/closed status. When a research
+// result exists for a grant, its recommendation wins over scoring's.
+function effectiveRecommendation(scoring, research) {
+  return research?.recommendation || scoring.recommendation;
+}
+
+function tierLabel(scoring, research) {
+  const rec = effectiveRecommendation(scoring, research);
+  if (rec === 'INELIGIBLE' ||
       (scoring.flags || []).some(f => INELIGIBLE_FLAGS.includes(f))) return '⛔ Ineligible';
-  switch (scoring.recommendation) {
+  switch (rec) {
     case 'APPLY_NOW': return '🚀 Apply Now';
     case 'CONSIDER':  return '⭐ Consider';
     case 'MONITOR':   return '👀 Monitor';
@@ -115,10 +160,11 @@ function tierLabel(scoring) {
   }
 }
 
-function tierOrder(scoring) {
-  if (scoring.recommendation === 'INELIGIBLE' ||
+function tierOrder(scoring, research) {
+  const rec = effectiveRecommendation(scoring, research);
+  if (rec === 'INELIGIBLE' ||
       (scoring.flags || []).some(f => INELIGIBLE_FLAGS.includes(f))) return 5;
-  switch (scoring.recommendation) {
+  switch (rec) {
     case 'APPLY_NOW': return 0;
     case 'CONSIDER':  return 1;
     case 'MONITOR':   return 2;
@@ -169,40 +215,57 @@ function buildScoreBreakdown(scoring) {
 
 // ── Property builder (shared by create + update) ──────────────────────────────
 
-function buildProperties(grant, scoring) {
+// `isCreate` controls whether Status gets set. Status is Ricardo's manual
+// workflow field (New/Reviewing/Applied/Won/Rejected) — a re-sync used to
+// silently reset it back to "New" every time a grant re-scored, clobbering
+// whatever he'd moved it to. Only stamp it on first creation now.
+function buildProperties(grant, scoring, research, isCreate) {
   const score  = scoring.final_score ?? 0;
   const today  = new Date().toISOString().split('T')[0];
   const amount = formatAmount(grant);
   const themes = (grant.themes || []).slice(0, 10).map(t => ({ name: String(t).slice(0, 100) }));
+  const fingerprint = grantFingerprint(grant);
 
   let deadlineObj = null;
   if (grant.deadline && /^\d{4}-\d{2}-\d{2}$/.test(grant.deadline))
     deadlineObj = { start: grant.deadline };
 
+  const researchStatusName = research
+    ? (research.appears_closed_or_expired ? 'Closed'
+      : (research.status_evidence === null || research.status_evidence === undefined ? 'Could not confirm' : 'Open'))
+    : null;
+
   return {
     Name:   { title: [{ text: { content: String(grant.title || 'Untitled').slice(0, 200) } }] },
     Score:  { number: Math.round(score * 100) / 100 },
-    Tier:   { select: { name: tierLabel(scoring) } },
+    Tier:   { select: { name: tierLabel(scoring, research) } },
     ...(deadlineObj ? { Deadline: { date: deadlineObj } } : {}),
     URL:    { url: grant.url || null },
     Funder: { rich_text: [{ text: { content: String(grant.funder || '').slice(0, 200) } }] },
     Amount: { rich_text: [{ text: { content: amount } }] },
     Country:{ rich_text: [{ text: { content: String(grant.country || '').slice(0, 200) } }] },
     ...(themes.length ? { Themes: { multi_select: themes } } : {}),
+    Fingerprint:         { rich_text: [{ text: { content: fingerprint.slice(0, 200) } }] },
     'Deadline Note':     { rich_text: [{ text: { content: formatDeadlineNote(grant) } }] },
     'Score Breakdown':   { rich_text: [{ text: { content: buildScoreBreakdown(scoring).slice(0, 500) } }] },
     'Application Angle': { rich_text: [{ text: { content: String(scoring.application_angle || '').slice(0, 2000) } }] },
     'Best Projects':     { rich_text: [{ text: { content: (scoring.best_projects || []).join(', ').slice(0, 500) } }] },
     Source:              { rich_text: [{ text: { content: String(grant.source || '').slice(0, 200) } }] },
     'Competitive Fit':   { number: Math.round((scoring.scores?.competitive_fit ?? 0) * 100) / 100 },
-    Status:      { select: { name: 'New' } },
+    'Deep Researched':   { checkbox: !!research },
+    ...(research ? {
+      'Likelihood %':     { number: research.likelihood_percent ?? null },
+      'Research Status':  { select: { name: researchStatusName } },
+      'Research Summary': { rich_text: [{ text: { content: (research.report || '').slice(0, 1900) } }] },
+    } : {}),
+    ...(isCreate ? { Status: { select: { name: 'New' } } } : {}),
     'Scan Date': { date: { start: today } },
   };
 }
 
 // ── Page body blocks (used only on first create) ──────────────────────────────
 
-function buildPageChildren(grant, scoring) {
+function buildPageChildren(grant, scoring, research) {
   const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
   const breakdown = buildScoreBreakdown(scoring);
   const reasoning = scoring.reasoning || '';
@@ -259,6 +322,42 @@ function buildPageChildren(grant, scoring) {
     });
   }
 
+  if (research) {
+    blocks.push(
+      { object: 'block', type: 'divider', divider: {} },
+      {
+        object: 'block', type: 'heading_3',
+        heading_3: { rich_text: [{ type: 'text', text: { content: '🔎 Deep Research' } }] },
+      },
+      {
+        object: 'block', type: 'callout',
+        callout: {
+          icon: { emoji: research.appears_closed_or_expired ? '⛔' : '✅' },
+          rich_text: [{ type: 'text', text: {
+            content: `${research.likelihood_percent}% likelihood — ${research.recommendation}` +
+              (research.status_evidence ? `. ${research.status_evidence}` : ''),
+          } }],
+          color: research.appears_closed_or_expired ? 'red_background' : 'green_background',
+        },
+      },
+    );
+    // Notion rich_text blocks cap at ~2000 chars — split the full report
+    // into paragraph chunks so nothing gets silently truncated.
+    const report = research.report || '';
+    for (let i = 0; i < report.length; i += 1900) {
+      blocks.push({
+        object: 'block', type: 'paragraph',
+        paragraph: { rich_text: [{ type: 'text', text: { content: report.slice(i, i + 1900) } }] },
+      });
+    }
+    if (research.sources?.length) {
+      blocks.push({
+        object: 'block', type: 'paragraph',
+        paragraph: { rich_text: [{ type: 'text', text: { content: 'Sources: ' + research.sources.join(', ') }, annotations: { color: 'gray' } }] },
+      });
+    }
+  }
+
   blocks.push(
     { object: 'block', type: 'divider', divider: {} },
     {
@@ -278,28 +377,31 @@ function buildPageChildren(grant, scoring) {
 
 // ── Decide whether an existing page needs updating ───────────────────────────
 
-function shouldUpdate(existing, scoring) {
-  const newTier  = tierLabel(scoring);
+function shouldUpdate(existing, scoring, research) {
+  const newTier  = tierLabel(scoring, research);
   const newScore = scoring.final_score ?? 0;
   const newAngle = scoring.application_angle || '';
   if (existing.tier  !== newTier)                         return true;
   if (Math.abs((existing.score || 0) - newScore) > 0.05)  return true;
   if ((existing.angle || '') !== newAngle)                return true;
+  if (research && !existing.researched)                   return true; // newly researched
   return false;
 }
 
 // ── Update existing page: PATCH properties + append rescore note ──────────────
 
-async function updatePage(pageId, grant, scoring) {
-  await notionRequest('PATCH', `pages/${pageId}`, { properties: buildProperties(grant, scoring) });
+async function updatePage(pageId, grant, scoring, research) {
+  await notionRequest('PATCH', `pages/${pageId}`, { properties: buildProperties(grant, scoring, research, false) });
 
   const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-  const note = `Re-scored ${timestamp} → ${tierLabel(scoring)} (${(scoring.final_score||0).toFixed(2)}). ${(scoring.reasoning || '').slice(0, 300)}`;
+  const note = `Re-scored ${timestamp} → ${tierLabel(scoring, research)} (${(scoring.final_score||0).toFixed(2)}).` +
+    (research ? ` Deep research: ${research.likelihood_percent}% — ${(research.status_evidence || '').slice(0, 200)}`
+              : ` ${(scoring.reasoning || '').slice(0, 300)}`);
   await notionRequest('PATCH', `blocks/${pageId}/children`, {
     children: [{
       object: 'block', type: 'callout',
       callout: {
-        icon: { emoji: '🔄' },
+        icon: { emoji: research ? '🔎' : '🔄' },
         rich_text: [{ type: 'text', text: { content: note.slice(0, 600) } }],
         color: 'blue_background',
       },
@@ -310,12 +412,15 @@ async function updatePage(pageId, grant, scoring) {
 // ── Update database description with scan stats ───────────────────────────────
 
 async function updateDatabaseMeta(scoredGrants, newCount, updatedCount) {
-  const total      = scoredGrants.filter(g => g.scoring?.final_score != null).length;
-  const applyNow   = scoredGrants.filter(g => g.scoring?.recommendation === 'APPLY_NOW').length;
-  const consider   = scoredGrants.filter(g => g.scoring?.recommendation === 'CONSIDER').length;
-  const monitor    = scoredGrants.filter(g => g.scoring?.recommendation === 'MONITOR').length;
-  const ineligible = scoredGrants.filter(g => g.scoring?.recommendation === 'INELIGIBLE').length;
-  const skip       = scoredGrants.filter(g => g.scoring?.recommendation === 'SKIP').length;
+  const withScore = scoredGrants.filter(g => g.scoring?.final_score != null);
+  const recs      = withScore.map(g => effectiveRecommendation(g.scoring, g.research));
+  const total      = withScore.length;
+  const applyNow   = recs.filter(r => r === 'APPLY_NOW').length;
+  const consider   = recs.filter(r => r === 'CONSIDER').length;
+  const monitor    = recs.filter(r => r === 'MONITOR').length;
+  const ineligible = recs.filter(r => r === 'INELIGIBLE').length;
+  const skip       = recs.filter(r => r === 'SKIP').length;
+  const researched = withScore.filter(g => g.research).length;
 
   const dateStr = new Date().toLocaleDateString('en-US', {
     month: 'long', day: 'numeric', year: 'numeric',
@@ -329,7 +434,7 @@ async function updateDatabaseMeta(scoredGrants, newCount, updatedCount) {
   ].filter(Boolean).join('  ·  ');
 
   const line1 = `🕐 Last scan: ${dateStr} (Honduras time)${deltaStr ? '   ·   ' + deltaStr : ''}`;
-  const line2 = `📊 ${total} analyzed   🚀 ${applyNow} Apply Now   ⭐ ${consider} Consider   👀 ${monitor} Monitor   ⏭ ${skip} Skip   ⛔ ${ineligible} Ineligible`;
+  const line2 = `📊 ${total} analyzed   🚀 ${applyNow} Apply Now   ⭐ ${consider} Consider   👀 ${monitor} Monitor   ⏭ ${skip} Skip   ⛔ ${ineligible} Ineligible   🔎 ${researched} deep-researched`;
 
   await notionRequest('PATCH', `databases/${DB_ID}`, {
     description: [{ type: 'text', text: { content: line1 + '\n' + line2 } }],
@@ -338,48 +443,57 @@ async function updateDatabaseMeta(scoredGrants, newCount, updatedCount) {
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
-async function syncToNotion(scoredGrants) {
+async function syncToNotion(scoredGrants, researchCache) {
   if (!TOKEN || !DB_ID) {
     console.log('  ⚠  Notion not configured — add NOTION_TOKEN + NOTION_DB_ID to .env');
     return;
   }
 
-  const sorted = [...scoredGrants]
+  const { getResearch } = require('./tracker/index');
+  researchCache = researchCache || {};
+
+  const withResearch = scoredGrants
     .filter(g => g.scoring && g.scoring.final_score != null)
-    .sort((a, b) => {
-      const ta = tierOrder(a.scoring), tb = tierOrder(b.scoring);
-      return ta !== tb ? ta - tb : b.scoring.final_score - a.scoring.final_score;
-    });
+    .map(g => ({ ...g, research: getResearch(g.grant, researchCache) }));
+
+  // Highest-priority first, always — matches "empezá arriba desde los mejor
+  // puntuados": researched grants use their (more authoritative) research
+  // recommendation for ordering, everything else uses the surface score.
+  const sorted = withResearch.sort((a, b) => {
+    const ta = tierOrder(a.scoring, a.research), tb = tierOrder(b.scoring, b.research);
+    return ta !== tb ? ta - tb : b.scoring.final_score - a.scoring.final_score;
+  });
 
   console.log(`\n📋 Notion sync — ${sorted.length} grants (all tiers)...`);
 
   await ensureSchema();
   const existing = await getExistingPages();
 
-  const genuinelyNew = sorted.filter(g => g.grant?.url && !existing.has(g.grant.url)).length;
+  const genuinelyNew = sorted.filter(g => !existing.has(identityKeyFor(g.grant))).length;
   console.log(`   ${existing.size} in Notion now  ·  ${genuinelyNew} new candidates`);
 
   let added = 0, updated = 0, skipped = 0, errors = 0;
 
-  for (const { grant, scoring } of sorted) {
-    const existingPage = grant.url ? existing.get(grant.url) : null;
+  for (const { grant, scoring, research } of sorted) {
+    const key = identityKeyFor(grant);
+    const existingPage = key ? existing.get(key) : null;
 
     if (!existingPage) {
       // ── New grant: create ──
       try {
         const res = await notionRequest('POST', 'pages', {
           parent: { database_id: DB_ID },
-          properties: buildProperties(grant, scoring),
-          children: buildPageChildren(grant, scoring),
+          properties: buildProperties(grant, scoring, research, true),
+          children: buildPageChildren(grant, scoring, research),
         });
         if (res.id) { added++; process.stdout.write('+'); }
         else { errors++; if (res.message) console.error(`\n   ✗ create "${grant.title}": ${res.message}`); }
       } catch (err) { errors++; console.error(`\n   ✗ create "${grant.title}": ${err.message}`); }
 
-    } else if (shouldUpdate(existingPage, scoring)) {
+    } else if (shouldUpdate(existingPage, scoring, research)) {
       // ── Changed: update ──
       try {
-        await updatePage(existingPage.pageId, grant, scoring);
+        await updatePage(existingPage.pageId, grant, scoring, research);
         updated++; process.stdout.write('~');
       } catch (err) { errors++; console.error(`\n   ✗ update "${grant.title}": ${err.message}`); }
 
@@ -414,7 +528,8 @@ if (require.main === module) {
     process.exit(1);
   }
   const scored = JSON.parse(fs.readFileSync(SCORED, 'utf8'));
-  syncToNotion(scored).catch(err => {
+  const { loadResearchCache } = require('./tracker/index');
+  syncToNotion(scored, loadResearchCache()).catch(err => {
     console.error('Sync failed:', err.message);
     process.exit(1);
   });

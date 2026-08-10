@@ -3,3 +3,5 @@ output/
 logs/
 org-profile.yaml
 .env
+tokens/
+.venv-agent-reach/

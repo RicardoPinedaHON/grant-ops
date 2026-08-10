@@ -17,12 +17,14 @@ const path = require('path');
 const yaml = require('yaml');
 const { combineScores }                               = require('./scorer/index');
 const { scoreGrant }                                  = require('./scorer/manual-scorer');
-const { saveTSV, saveMarkdownReport, saveHTMLReport } = require('./tracker/index');
+const { saveTSV, saveMarkdownReport, saveHTMLReport, loadResearchCache } = require('./tracker/index');
 const { syncToNotion }                                = require('./notion-sync');
 const { enrichGrants }                                = require('./enricher');
 const { closeBrowser }                                = require('./scrapers/playwright-base');
+const log                                             = require('./logger');
 
 async function main() {
+  log.initLog('scoring');
   const prescored = JSON.parse(fs.readFileSync('./output/grants_prescored.json', 'utf8'));
   const profile   = yaml.parse(fs.readFileSync('./org-profile.yaml', 'utf8'));
 
@@ -34,9 +36,11 @@ async function main() {
   fs.writeFileSync('./output/grants_prescored.json', JSON.stringify(enriched, null, 2));
 
   // ── Step 2: Score ─────────────────────────────────────────────────────────
+  log.logSection(`SCORING DECISIONS (${enriched.length} grants)`);
   const scoredGrants = enriched.map(item => {
     const claudeResponse = scoreGrant(item.grant);
     const scoring = combineScores(item.prescore, claudeResponse);
+    log.logGrantScored(item.grant, scoring);
     return { grant: item.grant, scoring };
   });
 
@@ -55,7 +59,7 @@ async function main() {
   console.log('Report (HTML):', htmlPath);
 
   const actionable = scoredGrants
-    .filter(g => ['APPLY_NOW', 'CONSIDER'].includes(g.scoring.recommendation))
+    .filter(g => ['APPLY_NOW', 'CONSIDER', 'MONITOR'].includes(g.scoring.recommendation))
     .sort((a, b) => b.scoring.final_score - a.scoring.final_score);
 
   if (actionable.length) {
@@ -66,11 +70,20 @@ async function main() {
     });
   }
 
+  // Log summary
+  log.logSummary({ ...byRec,
+    'Log file': `output/logs/scoring_*.log`,
+  });
+  log.closeLog();
+
   // ── Step 4: Close Playwright browser (opened by enricher) ────────────────
   await closeBrowser().catch(() => {});
 
   // ── Step 5: Notion sync ───────────────────────────────────────────────────
-  await syncToNotion(scoredGrants).catch(err => console.error('Notion sync error:', err.message));
+  // Pass the research cache so grants already deep-researched (by an earlier
+  // run or by src/deep-research.js) are tagged/tiered correctly from this
+  // very first sync of the run, not just after a later research pass.
+  await syncToNotion(scoredGrants, loadResearchCache()).catch(err => console.error('Notion sync error:', err.message));
 }
 
 main().catch(err => {

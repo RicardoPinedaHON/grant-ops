@@ -77,6 +77,45 @@ rss:
     url: "https://ec.europa.eu/info/funding-tenders/opportunities/portal/rss"
     enabled: false
 
+linkedin:
+  enabled: true
+  # Polite delay (ms) between company-page requests — sequential, no
+  # concurrent hammering. See src/scrapers/linkedin.js.
+  request_delay_ms: 3000
+  # Public, unauthenticated access ONLY — via Jina Reader against the
+  # company ROOT page (https://www.linkedin.com/company/<slug>/), never
+  # /posts/ or /about/ (those return LinkedIn's login wall even through
+  # Jina Reader). No login, cookies, browser session, or authenticated
+  # mcp-server-linkedin is used for this source.
+  #
+  # To add an organization: append an entry below with its company root
+  # URL. No code changes needed — this list can grow to dozens/hundreds
+  # of entries.
+  sources:
+    - name: "ONGLink"
+      url: "https://www.linkedin.com/company/onglink/"
+      enabled: true
+    - name: "Leaders of Today Opportunities"
+      url: "https://www.linkedin.com/company/leaders-of-todayopportunities/"
+      enabled: true
+    - name: "EasyGrant"
+      url: "https://www.linkedin.com/company/easy-grant/"
+      enabled: true
+    - name: "Fondos y Convocatorias"
+      url: "https://www.linkedin.com/company/fondos-y-convocatorias/"
+      enabled: true
+    - name: "Funds4impact"
+      url: "https://www.linkedin.com/company/funds4impact/"
+      enabled: true
+    # Slug is "allyforaction" (allyforaction.org) but the LinkedIn page now
+    # displays as "HOST" — the org rebranded on LinkedIn, kept the old slug.
+    - name: "HOST (Ally for Action)"
+      url: "https://www.linkedin.com/company/allyforaction/"
+      enabled: true
+    - name: "The Possibilists"
+      url: "https://www.linkedin.com/company/thepossibilists/"
+      enabled: true
+
 scrapers:
   - name: "fundsforNGOs - Honduras"
     url: "https://www.fundsforngos.org/tag/honduras/"

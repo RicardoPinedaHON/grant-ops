@@ -13,12 +13,13 @@ const fs   = require('fs');
 const ROOT = path.join(__dirname, '..');
 
 const COMMANDS = {
-  init:   'Interactive setup — creates your org-profile.yaml',
-  scan:   'Fetch new grant opportunities from all sources',
-  score:  'Score fetched grants against your org profile',
-  expand: 'Expand newsletter digests into individual grants',
-  report: 'Open the latest HTML report in your browser',
-  run:    'Full pipeline: scan → score → expand → report',
+  init:     'Interactive setup — creates your org-profile.yaml',
+  scan:     'Fetch new grant opportunities from all sources',
+  score:    'Score fetched grants against your org profile',
+  research: 'Deep-research the best-scored grants (open in Claude Code)',
+  expand:   'Expand newsletter digests into individual grants',
+  report:   'Open the latest HTML report in your browser',
+  run:      'Full pipeline: scan → score → expand → report',
 };
 
 const cmd = process.argv[2];
@@ -39,6 +40,10 @@ switch (cmd) {
 
   case 'score':
     run('node', ['src/run-scoring.js']);
+    break;
+
+  case 'research':
+    run('node', ['src/deep-research.js', ...process.argv.slice(3)]);
     break;
 
   case 'expand':

@@ -103,13 +103,12 @@ function extractFromText(text) {
     result.deadline = 'rolling';
     // Still try to extract amount even if rolling
   } else {
-    // Deadline extraction
-    const today = new Date().toISOString().split('T')[0];
+    // Deadline extraction — keep past deadlines so the user sees when the cycle ran
     for (const pat of DEADLINE_PATS) {
       const m = text.match(pat);
       if (!m) continue;
       const parsed = parseDate(m[1] || m[0]);
-      if (parsed && parsed >= today) {
+      if (parsed) {
         result.deadline = parsed;
         break;
       }
@@ -125,7 +124,9 @@ function extractFromText(text) {
     const r2 = (m[2] || '').replace(/[,.]/g, '');
     const n1 = parseInt(r1, 10);
     const n2 = parseInt(r2, 10);
-    if (isNaN(n1) || n1 < 500) continue; // ignore tiny numbers (dates, IDs, etc.)
+    // Reject too-small values and year-shaped numbers (1900–2100)
+    if (isNaN(n1) || n1 < 1000) continue;
+    if (n1 >= 1900 && n1 <= 2100 && isNaN(n2)) continue;
     if (!isNaN(n2) && n2 > n1) {
       result.amount_min = n1;
       result.amount_max = n2;
@@ -188,12 +189,14 @@ async function processBatch(items, cache) {
 async function enrichGrants(items) {
   const cache = loadCache();
 
-  // Determine which grants need enrichment
+  // Determine which grants need Playwright enrichment (requires a real URL)
   const needsWork = items.filter(item => {
     const grant = item.grant || item;
     const url   = grant.url;
-    if (!url) return false;
-    if (grant.deadline === 'rolling') return false; // already explicit
+    if (!url) return false; // no URL → Brave will handle it
+    // Skip grants where 'rolling' came from a reliable source (explicit tag in scraper),
+    // but NOT email grants — their 'rolling' is just "parser found no date in email body"
+    if (grant.deadline === 'rolling' && grant.type !== 'email') return false;
 
     const cached = cache[url];
     if (cached && Date.now() - new Date(cached.fetched_at).getTime() < TTL_MS) return false;
@@ -205,7 +208,9 @@ async function enrichGrants(items) {
 
   if (needsWork.length === 0) {
     console.log('  Enricher: nothing to fetch (all cached or already complete)');
-    return applyDefaults(applyCache(items, cache));
+    const afterPlaywright = applyCache(items, cache);
+    const afterBrave = await braveEnrichGrants(afterPlaywright);
+    return applyDefaults(afterBrave);
   }
 
   console.log(`  Enricher: fetching ${needsWork.length} pages with Playwright (${CONCURRENCY} at a time)...`);

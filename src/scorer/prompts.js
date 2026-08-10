@@ -132,4 +132,4 @@ Description:
 ${(grant.description || '').slice(0, 800)}${grant.description?.length > 800 ? '...' : ''}`;
 }
 
-module.exports = { buildScoringPrompt };
+module.exports = { buildScoringPrompt, buildOrgSummary, buildGapsBlock, buildGrantSummary };

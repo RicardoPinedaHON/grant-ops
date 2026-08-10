@@ -1,10 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const { buildHTML } = require('./html-report');
+const { grantFingerprint } = require('../utils/grant-fingerprint');
 
 const OUTPUT_DIR = path.join(process.cwd(), 'output');
 const TSV_FILE = path.join(OUTPUT_DIR, 'grants.tsv');
 const HISTORY_FILE = path.join(OUTPUT_DIR, 'history.json');
+const RESEARCH_FILE = path.join(OUTPUT_DIR, 'grants_research.json');
 
 const TSV_HEADERS = [
   'score', 'recommendation', 'title', 'funder', 'source',
@@ -33,14 +35,74 @@ function saveHistory(history) {
 }
 
 function isKnown(grant, history) {
-  return !!history[grant.id];
+  if (history[grant.id]) return true;
+  // Also check by fingerprint — catches same grant with different ID across sources/runs
+  const fp = grantFingerprint(grant);
+  return fp.length > 3 && !!history[`fp:${fp}`];
 }
 
 function markSeen(grant, history) {
-  history[grant.id] = {
+  const entry = {
     title: grant.title,
     first_seen: new Date().toISOString(),
     url: grant.url,
+  };
+  history[grant.id] = entry;
+  // Store fingerprint alias so the same grant under a different ID is recognized
+  const fp = grantFingerprint(grant);
+  if (fp.length > 3) {
+    history[`fp:${fp}`] = { grant_id: grant.id, title: grant.title, first_seen: entry.first_seen };
+  }
+}
+
+// ── Post-level dedup (LinkedIn and any other raw-content source) ───────────
+// Same history.json storage as grant dedup above, different key namespace
+// (`li:<fingerprint>`) so the two identity spaces never collide. This is
+// deliberately generic content-fingerprint dedup — not grant-specific — so
+// it persists across runs through the exact same loadHistory/saveHistory
+// calls scan.js already makes, with no parallel storage.
+function isPostSeen(fingerprint, history) {
+  return !!history[`li:${fingerprint}`];
+}
+
+function markPostSeen(fingerprint, meta, history) {
+  history[`li:${fingerprint}`] = { ...meta, first_seen: new Date().toISOString() };
+}
+
+// ── Deep-research cache — same JSON-file storage pattern, own file since a
+// research result is a large object (full report), not a small "seen" flag.
+// Keyed by grantFingerprint() (falls back to grant.id when the fingerprint
+// is too weak/empty) so re-running a scan never pays for the same grant's
+// research twice, across runs, sources, or scan.js dedup churn.
+function researchKey(grant) {
+  const fp = grantFingerprint(grant);
+  return fp.length > 3 ? `fp:${fp}` : `id:${grant.id}`;
+}
+
+function loadResearchCache() {
+  if (!fs.existsSync(RESEARCH_FILE)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(RESEARCH_FILE, 'utf8'));
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveResearchCache(cache) {
+  ensureOutputDir();
+  fs.writeFileSync(RESEARCH_FILE, JSON.stringify(cache, null, 2));
+}
+
+function getResearch(grant, cache) {
+  return cache[researchKey(grant)] || null;
+}
+
+function setResearch(grant, result, cache) {
+  cache[researchKey(grant)] = {
+    ...result,
+    grant_title: grant.title,
+    grant_url: grant.url,
+    researched_at: new Date().toISOString(),
   };
 }
 
@@ -164,4 +226,8 @@ function sanitize(str) {
   return (str || '').replace(/\t/g, ' ').replace(/\n/g, ' ').trim();
 }
 
-module.exports = { saveTSV, saveMarkdownReport, saveHTMLReport, loadHistory, saveHistory, isKnown, markSeen };
+module.exports = {
+  saveTSV, saveMarkdownReport, saveHTMLReport, loadHistory, saveHistory, isKnown, markSeen,
+  isPostSeen, markPostSeen,
+  loadResearchCache, saveResearchCache, getResearch, setResearch,
+};

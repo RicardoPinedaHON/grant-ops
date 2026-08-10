@@ -163,6 +163,8 @@ module.exports = {
   buildPromptForClaude,
   combineScores,
   scoreWithoutClaude,
+  isNewsArticle,
+  SKIP_THRESHOLD,
   RECOMMEND_THRESHOLD,
   CONSIDER_THRESHOLD,
 };

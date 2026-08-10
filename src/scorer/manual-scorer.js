@@ -683,6 +683,44 @@ function scoreGrant(grant) {
     return scoreExpandedGrant(grant, text);
   }
 
+  // ── Email newsletter grants (ImpactShip, FFWD, etc.) ──────────────────────
+  // Email-sourced grants have source like "Email: ImpactShip" and type "email".
+  // Route through content-based scoring instead of the generic fallback.
+
+  if (grant.type === 'email' || /^email:/i.test(src)) {
+    const titleTrimmed = grant.title.trim();
+    // Job postings / internships — title-first check (regex after dashes is unreliable)
+    if (/^(operations|project|programme|program|communications|community development|digital media)\s+(coordinator|officer|manager|director)\b/i.test(titleTrimmed) ||
+        /\b(internship|intern position|job posting|vacancy|we.re hiring|open position|join our team)\b/i.test(text)) {
+      return ineligible('Job posting / internship — not a grant for organizations.');
+    }
+    // Newsletter section headers (ImpactShip boilerplate that slips through the parser)
+    if (/^(your go-to for|decoding complex|the jargon decoder|programmes?\s*[-–|]|what.s good in tech|the captain|the opportunities dock|fellowships & awards|learning opportunity)/i.test(titleTrimmed) ||
+        titleTrimmed.length < 10 || /^\s*[-–|]+\s*$/.test(titleTrimmed) ||
+        /^PROGRAMMES\s*[-–|]/i.test(titleTrimmed)) {
+      return ineligible('Newsletter section header — not a grant opportunity.');
+    }
+    // UN forums, regional dialogues, non-grant events
+    if (/\b(regional dialogues?|un forum\b|youth forum\b)\b/i.test(titleTrimmed) &&
+        !/grant|fund|award|fellowship|prize/i.test(text)) {
+      return ineligible('UN forum / regional dialogue — not a grant call.');
+    }
+    // Conferences and registration-based events
+    if (/\b(online conference|summit registration|model un|delegate fee|conference fee)\b/i.test(text)) {
+      return ineligible('Conference/event registration — not a grant for NGOs.');
+    }
+    // Academic degree programs (not organizational grants)
+    // Use .{0,8} to tolerate encoding artifacts around apostrophes (e.g. "Masterâ€™s")
+    if (/\bmaster.{0,8}s\s+(?:in\b|degree\b|of\s)/i.test(text) ||
+        /\b(phd program|doctoral program|undergraduate program|postgraduate study abroad)\b/i.test(text)) {
+      if (!/grant|fund|award/i.test(text)) {
+        return ineligible('Academic degree program — not an organizational grant.');
+      }
+    }
+    // Legitimate grant/fellowship — score by content
+    return scoreExpandedGrant(grant, text);
+  }
+
   // Generic fallback
   return {
     mission_alignment: 0.1, strategic_fit: -0.1,
@@ -697,7 +735,10 @@ function scoreExpandedGrant(grant, text) {
   let mission = 0.3;
   let fit = 0.0;
   let angle = null;
-  let reasoning = 'Individual grant extracted from ImpactFunding newsletter.';
+  const isEmailGrant = grant.type === 'email';
+  let reasoning = isEmailGrant
+    ? 'Grant from email newsletter — scored by thematic content.'
+    : 'Individual grant extracted from ImpactFunding newsletter.';
 
   if (/air quality|pm2\.?5|pollution|contaminaci/i.test(text)) {
     projects.push('Aire Limpio Honduras');
@@ -733,9 +774,13 @@ function scoreExpandedGrant(grant, text) {
 
   if (projects.length === 0) {
     mission = 0.2;
-    reasoning = 'Extracted from digest but no strong thematic alignment found with Sustenta\'s projects.';
+    reasoning = isEmailGrant
+      ? 'Grant from newsletter but no strong thematic match with Sustenta\'s focus areas.'
+      : 'Extracted from digest but no strong thematic alignment found with Sustenta\'s projects.';
   } else {
-    reasoning = `Extracted from ImpactFunding digest. Thematic match with: ${projects.join(', ')}.`;
+    reasoning = isEmailGrant
+      ? `Newsletter grant with thematic match: ${projects.join(', ')}.`
+      : `Extracted from ImpactFunding digest. Thematic match with: ${projects.join(', ')}.`;
   }
 
   return {
