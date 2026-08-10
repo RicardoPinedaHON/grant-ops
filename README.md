@@ -1,6 +1,11 @@
 # grant-ops
 
-AI-powered grant opportunity scanner for NGOs. Monitors 10+ sources, scores opportunities against your org profile, expands newsletter digests into individual grants, and produces a visual HTML report — all without an API key.
+AI-powered grant opportunity scanner for NGOs. Monitors 15+ sources — RSS,
+Playwright scrapers, public LinkedIn company pages, an Outlook inbox, and
+static/rolling calls — scores opportunities against your org profile,
+deep-researches the best matches live, and syncs everything to a Notion
+database (plus a self-contained HTML report). No API key required for any
+of it — scoring and research both run inside your Claude Code session.
 
 Built for LAC/Honduras environmental and youth NGOs. Adaptable to any region or focus area.
 
@@ -9,25 +14,38 @@ Built for LAC/Honduras environmental and youth NGOs. Adaptable to any region or 
 ## How it works
 
 ```
-Sources → Scrapers → Pre-score (rules) → AI scoring → HTML report
-              ↓
-     Newsletter digests
-     opened + expanded
-     into individual grants
+Sources → Scrapers → Pre-score (rules) → AI scoring → Deep research → Notion + HTML report
+              ↓                                              ↑
+     Newsletter digests                          Live WebSearch/WebFetch,
+     opened + expanded                           only for the best-scored,
+     into individual grants                      not-yet-researched grants
 ```
 
-1. **Fetches** grants from Grants.gov, RSS feeds, USAID Honduras, IKI Small Grants, RECID, Gestionándote, and ImpactFunding Substack
-2. **Expands** ImpactFunding newsletter digests — Playwright opens each issue and extracts the individual grant links inside
-3. **Pre-scores** each grant on geography, size match, deadline, org-type eligibility, and partnership requirements
-4. **Scores** mission alignment and strategic fit using Claude Code (no API key — runs inside your Claude Code session)
-5. **Outputs** a self-contained HTML report with filters for each priority tier
+1. **Fetches** grants from RSS feeds, Playwright scrapers, public LinkedIn
+   company pages, an Outlook inbox folder, and hardcoded rolling calls
+2. **Expands** newsletter digests — Playwright opens each issue and extracts
+   the individual grant links inside
+3. **Pre-scores** each grant on geography, size match, deadline, org-type
+   eligibility, and partnership requirements — with a hard ineligibility
+   filter (wrong geography, scholarship-only, course-not-grant, VC-only,
+   news article, no specific opportunity, conference-not-grant)
+4. **Scores** mission alignment, competitive fit, and strategic fit using
+   Claude Code (no API key — runs inside your Claude Code session)
+5. **Deep-researches** the best-scored, not-yet-researched grants live —
+   confirms whether a call is actually still open and, if closed, estimates
+   when it's likely to reopen — again via Claude Code's own WebSearch/WebFetch,
+   no third-party search API
+6. **Syncs** everything to a Notion database (tier, score, research status,
+   likelihood %) and outputs a self-contained HTML report with filters for
+   each priority tier
 
 ---
 
 ## Requirements
 
 - [Node.js](https://nodejs.org) 18+
-- [Claude Code](https://claude.ai/code) (for AI scoring — uses your existing subscription, no API key needed)
+- [Claude Code](https://claude.ai/code) (for AI scoring/research — uses your existing subscription, no API key needed)
+- A Notion integration token + database ID if you want the Notion sync (optional — everything else works without it)
 
 ---
 
@@ -48,6 +66,8 @@ npx grant-ops init
 
 This asks you ~15 questions and creates your `org-profile.yaml`. You can also copy `org-profile.example.yaml` and fill it in manually.
 
+Copy `.env.example` to `.env` and fill in `NOTION_TOKEN`/`NOTION_DB_ID` (Notion sync), `BRAVE_SEARCH_KEY` (optional deadline/amount enrichment), and `GRAPH_CLIENT_ID`/`GRAPH_TENANT_ID` (optional Outlook inbox scanning — run `node scripts/auth-outlook.js` once to authenticate).
+
 ---
 
 ## Usage
@@ -58,15 +78,22 @@ This asks you ~15 questions and creates your `org-profile.yaml`. You can also co
 npx grant-ops run
 ```
 
-Runs scan → score → expand digests → opens the HTML report. That's it.
+Runs scan → score → expand digests. For deep research + Notion sync too, see
+`node src/deep-research.js` and `node src/notion-sync.js`, or just ask Claude
+Code to run the full cycle — it knows the sequence from `CLAUDE.md`.
 
 ### Step by step
 
 ```bash
 npx grant-ops scan      # fetch new grants from all sources
 npx grant-ops score     # rule-based scoring (fast, no AI needed)
-npx grant-ops expand    # expand ImpactFunding newsletter digests
+npx grant-ops expand    # expand newsletter digests
 npx grant-ops report    # open the latest HTML report in your browser
+```
+
+```bash
+node src/deep-research.js   # find + prep research prompts for top-scored grants
+node src/notion-sync.js     # push scored + researched grants to Notion
 ```
 
 ### NPM scripts (alternative)
@@ -77,6 +104,7 @@ npm run score
 npm run expand
 npm run report
 npm run run
+npm test        # unit tests — no network, no API keys
 ```
 
 ---
@@ -85,12 +113,16 @@ npm run run
 
 The report opens directly in your browser — no server required. Features:
 
-- Priority tiers: **Apply Now** · **Consider** · **Monitor** · **Skip**
+- Priority tiers: **Apply Now** · **Consider** · **Monitor** · **Skip** · **Ineligible**
 - Filter by tier with one click
 - Score breakdown bar per grant
-- Application angle for strong matches (≥3.5 score)
+- Application angle for strong matches
 - Best-fit project callout
-- Skip section hidden by default (accessible via filter)
+- Skip/Ineligible sections hidden by default (accessible via filter)
+
+This is a secondary/offline artifact — if you've set up the Notion sync,
+Notion is the day-to-day interface (it also carries deep-research status,
+which the HTML report doesn't surface as richly).
 
 ---
 
@@ -104,32 +136,41 @@ The report opens directly in your browser — no server required. Features:
 | Org type eligibility | 0.4 | Rules |
 | Partnership requirements | 0.3 | Rules |
 | Mission alignment | 1.2 | Claude Code |
-| Strategic fit | 0.1 | Claude Code |
-| **Total** | **4.5** | |
+| Competitive fit | -0.5 to 0.0 | Claude Code |
+| Strategic fit | -0.2 to 0.1 | Claude Code |
+| **Total (max)** | **~4.4** | |
 
-**Thresholds:** ≥4.2 Apply now · 3.5–4.1 Consider · 2.8–3.4 Monitor · <2.8 Skip
+**Thresholds:** ≥3.8 Apply Now · ≥3.2 Consider · ≥2.5 Monitor · else Skip.
+Any hard-ineligibility flag forces Ineligible regardless of score.
+
+Competitive fit exists to catch grants that are thematically on-topic but
+structurally the wrong shape for your org — e.g. a reef-conservation fund
+when you have no coastal portfolio, or an innovation fund requiring
+scale/RCT evidence a small NGO can't produce. See `CLAUDE.md`'s "theme
+match ≠ competitive fit" section for the full worked examples.
 
 ---
 
 ## Grant sources
 
-| Source | Type | Region focus |
+| Source | Type | Notes |
 |---|---|---|
-| Grants.gov | Free API | US bilateral / international |
-| USAID Honduras | Scraper | Honduras |
-| IKI Small Grants | Scraper | Global climate |
-| ImpactFunding Substack | RSS + Playwright digest expansion | Global, curated |
-| PhilanthropyNewsDigest | RSS | US foundations |
-| RECID | Scraper | LAC Spanish |
-| Gestionándote | Scraper | LAC Spanish |
-| fundsforNGOs | Scraper | LAC/environment (Cloudflare-limited) |
+| RSS feeds | `rss:` in sources.yaml | ImpactFunding Substack, Bond UK, Devex, etc. |
+| LinkedIn company pages | `linkedin:` in sources.yaml | Public guest-view only via Jina Reader, no login/auth |
+| Playwright scrapers | `scrapers:` in sources.yaml | fundsforNGOs, USAID Honduras, RECID, Gestionándote, IKI Small Grants |
+| Portal scrapers | own modules | WePropel, EasyGrant, Leaders of Today |
+| Outlook inbox | `src/scrapers/email-outlook.js` | Scans a folder of forwarded grant newsletters via Microsoft Graph |
+| Static/rolling calls | hardcoded | IAF, UNDP SGP, CEPF |
+
+Add a LinkedIn source by appending an entry under `linkedin.sources` in
+`config/sources.yaml` — no code changes needed.
 
 ---
 
 ## Adapting for your NGO
 
 1. Run `npx grant-ops init` — the wizard creates a valid `org-profile.yaml` for your org
-2. Optionally edit `config/sources.yaml` to enable/disable sources or add new RSS feeds
+2. Optionally edit `config/sources.yaml` to enable/disable sources or add new RSS/LinkedIn feeds
 3. Run `npx grant-ops run`
 
 No code changes needed. The scoring prompt reads your profile dynamically — focus areas, geography, grant size range, and previous funders all feed into the AI evaluation.
@@ -143,31 +184,59 @@ Edit `config/sources.yaml`:
 
 ---
 
-## Weekly automation (Windows)
+## Automation (Windows)
 
-Set up automatic weekly scans with Task Scheduler:
+The production setup runs the full pipeline — scan, score, deep-research,
+Notion sync — unattended every 2 days via Windows Task Scheduler, invoking
+`claude -p` with `.claude/skills/grant-full-pipeline/SKILL.md` as its
+instructions (that skill has the full no-pause, no-backgrounding contract
+for the headless run).
 
 ```powershell
-$action  = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c "C:\path\to\grant-ops\run-weekly.bat"' -WorkingDirectory 'C:\path\to\grant-ops'
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 8am
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RunOnlyIfNetworkAvailable
-Register-ScheduledTask -TaskName 'GrantOps Weekly Scan' -Action $action -Trigger $trigger -Settings $settings -Force
+$action  = New-ScheduledTaskAction -Execute "C:\path\to\grant-ops\run-full-pipeline.bat" -WorkingDirectory "C:\path\to\grant-ops"
+$trigger = New-ScheduledTaskTrigger -Once -At "<next reasonable time>" -RepetitionInterval (New-TimeSpan -Days 2) -RepetitionDuration (New-TimeSpan -Days 3650)
+Register-ScheduledTask -TaskName "GrantOps Full Pipeline" -Action $action -Trigger $trigger
 ```
 
-Logs are written to `logs/weekly.log`.
+Two prerequisites the task won't work without:
+1. **This project folder must be trusted** — run `claude` here once,
+   interactively, and accept the trust dialog. Without that,
+   `.claude/settings.json`'s permission allow-list is silently ignored in
+   headless (`claude -p`) mode and every command auto-denies with no prompt
+   to approve it. Hand-editing `~/.claude.json` does not reliably work.
+2. **Only run this on one machine at a time** against a given
+   OneDrive-synced copy of the project — `output/history.json` isn't a
+   database, and two machines writing it concurrently silently lose each
+   other's dedup state.
+
+Logs go to `logs/pipeline_run.log` (top-level summary per run) and
+`output/logs/scan_*.log` / `scoring_*.log` (full per-grant audit trail —
+what was fetched, what was filtered and why, what got queued for scoring).
+
+`run-weekly.bat` (scan + score + expand only, no deep-research/Notion sync)
+still exists for a lighter-weight setup if you don't want the full cycle.
 
 ---
 
-## AI scoring without an API key
+## AI scoring & research without an API key
 
-grant-ops uses Claude Code (the CLI/desktop app) as its AI engine. Instead of calling the Anthropic API, it loads grant data into a Claude Code session and scores natively using your existing subscription.
+grant-ops uses Claude Code (the CLI/desktop app) as its AI engine for both
+scoring and deep research. Instead of calling the Anthropic API directly, it
+loads grant data into a Claude Code session and works natively using your
+existing subscription — WebSearch/WebFetch for research, no third-party
+search API either.
 
 To score grants:
 1. Run `npx grant-ops scan` to fetch and pre-score
 2. Open the project in Claude Code
 3. Ask Claude: "score the grants" — it reads `output/grants_prescored.json` and scores each one
 
-For fully automated scoring (used by `npx grant-ops score` and `npx grant-ops run`), a rule-based scorer in `src/scorer/manual-scorer.js` handles all grants without any AI call. The Claude Code session is used for reviewing and re-scoring edge cases interactively.
+To deep-research the best matches:
+1. Run `node src/deep-research.js` — it prints the top not-yet-researched candidates and their research prompts
+2. Ask Claude Code to research them (spawns one subagent per grant, in parallel)
+3. Results get cached forever by grant fingerprint and synced to Notion
+
+For fully automated rule-based scoring (used by `npx grant-ops score` and `npx grant-ops run`), `src/scorer/manual-scorer.js` handles all grants without any AI call — Claude Code is for the higher-fidelity mission/competitive/strategic scoring pass and for deep research specifically.
 
 ---
 
@@ -176,32 +245,48 @@ For fully automated scoring (used by `npx grant-ops score` and `npx grant-ops ru
 ```
 grant-ops/
 ├── src/
-│   ├── cli.js              # CLI entry point
-│   ├── init-wizard.js      # Interactive org setup
-│   ├── scan.js             # Fetch + pre-score
-│   ├── run-scoring.js      # Rule-based scoring pipeline
-│   ├── expand-now.js       # Digest expansion (standalone)
-│   ├── score-with-claude.js # Claude Code session scorer
+│   ├── cli.js                  # CLI entry point
+│   ├── init-wizard.js          # Interactive org setup
+│   ├── scan.js                 # Fetch + pre-score + structured audit log
+│   ├── run-scoring.js          # Rule-based scoring pipeline
+│   ├── expand-now.js           # Digest expansion (standalone)
+│   ├── score-with-claude.js    # Claude Code session scorer
+│   ├── deep-research.js        # Deep-research target selection + Notion backlog + save
+│   ├── notion-sync.js          # Push scored/researched grants to Notion
+│   ├── logger.js               # Structured per-run audit log (output/logs/)
 │   ├── scorer/
-│   │   ├── rules.js        # Pre-scoring rules
-│   │   ├── manual-scorer.js # Hardcoded scoring logic
-│   │   ├── prompts.js      # Claude prompt builder
-│   │   └── index.js        # Score combiner
+│   │   ├── rules.js            # Pre-scoring rules + hard ineligibility filter
+│   │   ├── manual-scorer.js    # Hardcoded scoring logic
+│   │   ├── prompts.js          # Claude scoring prompt builder
+│   │   ├── research-prompts.js # Claude deep-research prompt builder
+│   │   └── index.js            # Score combiner, tier thresholds
 │   ├── scrapers/
-│   │   ├── index.js        # Orchestrator
-│   │   ├── digest-expander.js # Playwright digest opener
-│   │   ├── rss.js          # RSS feeds
-│   │   ├── grantsgov.js    # Grants.gov API
-│   │   └── ...             # Other scrapers
-│   └── tracker/
-│       ├── index.js        # Output writers (TSV, MD)
-│       └── html-report.js  # HTML report generator
+│   │   ├── index.js            # Orchestrator
+│   │   ├── digest-expander.js  # Playwright digest opener
+│   │   ├── linkedin.js         # Public LinkedIn company-page scraper
+│   │   ├── email-outlook.js    # Outlook inbox newsletter scanner
+│   │   ├── rss.js               # RSS feeds
+│   │   ├── grantsgov.js        # Grants.gov API
+│   │   └── ...                 # Other scrapers
+│   ├── tracker/
+│   │   ├── index.js            # Output writers (TSV, MD, research cache)
+│   │   └── html-report.js      # HTML report generator
+│   └── utils/
+│       └── grant-fingerprint.js # Shared grant-identity/dedup logic
+├── scripts/
+│   ├── auth-outlook.js         # One-time Microsoft Graph OAuth setup
+│   └── test-email-parse.js
+├── test/                       # Unit tests (no network, no API keys)
+├── .claude/skills/
+│   ├── grant-full-pipeline/    # The unattended-scheduled-job skill
+│   └── grant-deep-research/    # The interactive deep-research skill
 ├── config/
-│   └── sources.yaml        # Source URLs + config
-├── org-profile.yaml        # Your org (gitignored)
+│   └── sources.yaml            # Source URLs + config (RSS, LinkedIn, scrapers, portals)
+├── org-profile.yaml            # Your org (gitignored)
 ├── org-profile.example.yaml
-├── run-weekly.bat          # Windows automation
-└── output/                 # Generated reports (gitignored)
+├── run-full-pipeline.bat       # Scheduled job entry point (every 2 days)
+├── run-weekly.bat              # Lighter-weight scan+score-only automation
+└── output/                     # Generated reports + research cache (gitignored)
 ```
 
 ---
