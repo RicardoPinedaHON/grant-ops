@@ -7,7 +7,7 @@ deep-researches the best matches live, and syncs everything to a Notion
 database (plus a self-contained HTML report). No API key required for any
 of it — scoring and research both run inside your Claude Code session.
 
-Built for LAC/Honduras environmental and youth NGOs. Adaptable to any region or focus area.
+Region- and sector-agnostic by design — nothing in the codebase is LAC/Honduras-specific. Your org's focus areas, geography, grant-size range, and funder history all come from one `org-profile.yaml`, and sources come from one `config/sources.yaml`; swap either and the same pipeline works for a health NGO in Southeast Asia or a housing nonprofit in the US. This particular deployment happens to be configured for a Honduran environmental/youth-climate NGO — see "Adapting for your NGO" below for how little that has to do with the code.
 
 ---
 
@@ -153,17 +153,35 @@ match ≠ competitive fit" section for the full worked examples.
 
 ## Grant sources
 
-| Source | Type | Notes |
-|---|---|---|
-| RSS feeds | `rss:` in sources.yaml | ImpactFunding Substack, Bond UK, Devex, etc. |
-| LinkedIn company pages | `linkedin:` in sources.yaml | Public guest-view only via Jina Reader, no login/auth |
-| Playwright scrapers | `scrapers:` in sources.yaml | fundsforNGOs, USAID Honduras, RECID, Gestionándote, IKI Small Grants |
-| Portal scrapers | own modules | WePropel, EasyGrant, Leaders of Today |
-| Outlook inbox | `src/scrapers/email-outlook.js` | Scans a folder of forwarded grant newsletters via Microsoft Graph |
-| Static/rolling calls | hardcoded | IAF, UNDP SGP, CEPF |
+`src/scrapers/index.js::fetchAllGrants()` runs 9 source groups in sequence
+(Playwright ones sequential on purpose — see "never parallelize scraping"
+in `CLAUDE.md`'s troubleshooting section):
 
-Add a LinkedIn source by appending an entry under `linkedin.sources` in
-`config/sources.yaml` — no code changes needed.
+| # | Group | Module(s) | Config | Notes |
+|---|---|---|---|---|
+| 1 | API sources | `reliefweb.js`, `grantsgov.js` | `apis:` in sources.yaml | Both currently disabled pending an API key/scraper fix — see the `enabled:` comments in sources.yaml |
+| 2 | RSS feeds | `rss.js` | `rss:` in sources.yaml | ImpactFunding Substack, Bond UK, Devex, Climate Policy Initiative, Terra Viva Grants, etc. — global, not LAC-specific |
+| 3 | fundsforNGOs | `fundsforngos.js` | hardcoded URLs | Cloudflare-limited — see troubleshooting |
+| 4 | Spanish aggregators + USAID/Grants.gov | `spanish-aggregators.js`, `usaid-grantsgov.js` | hardcoded URLs | This is the one group tied to a specific geography by construction |
+| 5 | Foundations | `foundations.js` | hardcoded | IAF, UNDP SGP, CEPF, Rainforest Trust — all global/multi-country funders |
+| 6 | Multi-opportunity sources | `new-sources.js` | hardcoded | MAR Fund, HeroX, IDB, Mercociudades + static entries |
+| 7 | Portal scrapers | `portals.js` | hardcoded | WePropel, EasyGrant, Leaders of Today |
+| 8 | Outlook inbox | `email-outlook.js` | `.env` (Microsoft Graph) | Scans a folder of forwarded grant newsletters |
+| 9 | LinkedIn company pages | `linkedin.js` | `linkedin:` in sources.yaml | Public guest-view only via Jina Reader, no login/auth |
+
+Most of these are global or multi-country funders, not LAC-specific — the
+geography filtering happens downstream in scoring (`org-profile.yaml`
+matched against each grant's country/region), not in the scraper layer.
+Only group 4 is hardcoded to a specific region by construction; everything
+else pulls in whatever the source publishes and lets scoring decide what's
+relevant to your org.
+
+Add a **LinkedIn** or **RSS** source by appending an entry under
+`linkedin.sources`/`rss` in `config/sources.yaml` — no code changes needed.
+Adding a new hardcoded-URL group (3-7 above) means writing a small scraper
+module with the same `fetch<Name>()` shape and wiring it into
+`fetchAllGrants()` — more work, but each module is self-contained (see any
+of the existing ones for the pattern).
 
 ---
 
@@ -261,13 +279,20 @@ grant-ops/
 │   │   ├── research-prompts.js # Claude deep-research prompt builder
 │   │   └── index.js            # Score combiner, tier thresholds
 │   ├── scrapers/
-│   │   ├── index.js            # Orchestrator
+│   │   ├── index.js            # Orchestrator — fetchAllGrants(), 9 source groups
 │   │   ├── digest-expander.js  # Playwright digest opener
 │   │   ├── linkedin.js         # Public LinkedIn company-page scraper
 │   │   ├── email-outlook.js    # Outlook inbox newsletter scanner
-│   │   ├── rss.js               # RSS feeds
-│   │   ├── grantsgov.js        # Grants.gov API
-│   │   └── ...                 # Other scrapers
+│   │   ├── rss.js              # RSS feeds
+│   │   ├── grantsgov.js        # Grants.gov API (currently disabled)
+│   │   ├── reliefweb.js        # ReliefWeb API (currently disabled)
+│   │   ├── fundsforngos.js     # fundsforNGOs scraper
+│   │   ├── spanish-aggregators.js # Spanish-language aggregator sites
+│   │   ├── usaid-grantsgov.js  # USAID + Grants.gov scraping fallback
+│   │   ├── foundations.js      # IAF, UNDP SGP, CEPF, Rainforest Trust
+│   │   ├── new-sources.js      # MAR Fund, HeroX, IDB, Mercociudades + static
+│   │   ├── portals.js          # WePropel, EasyGrant, Leaders of Today
+│   │   └── playwright-base.js  # Shared Playwright helpers (getPage, safeGoto)
 │   ├── tracker/
 │   │   ├── index.js            # Output writers (TSV, MD, research cache)
 │   │   └── html-report.js      # HTML report generator

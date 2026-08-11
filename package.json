@@ -1,7 +1,7 @@
 {
   "name": "grant-ops",
   "version": "1.0.0",
-  "description": "AI-powered grant opportunity scanner for NGOs — LAC/Honduras focus",
+  "description": "AI-powered grant opportunity scanner for NGOs — region- and sector-agnostic, config-driven per org",
   "main": "src/cli.js",
   "bin": {
     "grant-ops": "src/cli.js"
@@ -19,9 +19,11 @@
   "keywords": [
     "grants",
     "ngo",
+    "nonprofit",
     "fundraising",
     "ai",
-    "latin-america"
+    "grant-scanning",
+    "grant-research"
   ],
   "author": "",
   "license": "MIT",

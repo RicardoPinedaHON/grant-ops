@@ -1,5 +1,9 @@
 # =============================================================
-# Fuentes de grants configuradas para LAC / Honduras
+# Grant sources — nothing about this file's structure is region-specific.
+# The entries below are THIS deployment's current config (tuned for a
+# Honduras/LAC environmental + youth NGO) — swap/add entries to point at
+# any region or theme; no code changes needed for rss/linkedin sources
+# (see CLAUDE.md and README.md "Adapting sources for other regions").
 # =============================================================
 
 apis:

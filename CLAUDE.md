@@ -144,24 +144,47 @@ A grant can be thematically related but structurally wrong. Always ask:
 - -0.1 if matching funds required >15%
 - -0.1 if grant is highly competitive with strong institutional bias (Solve, Echoing Green — hundreds of applicants, bias toward established names)
 
-## Sources (config/sources.yaml)
+## Sources
 
-Six categories, all in one file:
-- `rss:` — newsletter/blog feeds (ImpactFunding Substack, Bond UK, Devex, etc.)
-- `linkedin:` — public company pages via Jina Reader (`src/scrapers/linkedin.js`),
-  **no login/auth, guest-view only** — fetch the company ROOT page
-  (`/company/<slug>/`), never `/posts/` or `/about/` (those hit LinkedIn's
-  login wall even through Jina Reader). Add an org by appending a `sources:`
-  entry — no code changes needed.
-- `scrapers:` — Playwright-driven sites (fundsforNGOs, USAID, RECID, etc.)
-- portals — WePropel, EasyGrant, Leaders of Today (own scraper modules,
-  distinct from any LinkedIn company page of the same name — don't confuse
-  the two when reading logs, they're unrelated sources that happen to share
-  a name)
-- Outlook inbox (`src/scrapers/email-outlook.js`) — scans a folder of
-  forwarded grant newsletters via Microsoft Graph; one-time setup via
-  `node scripts/auth-outlook.js` (see `.env.example` for the required vars)
-- static/rolling calls (IAF, UNDP SGP, CEPF) hardcoded as always-open sources
+`src/scrapers/index.js::fetchAllGrants()` is the real map — 9 source groups,
+run in the numbered order below (Playwright ones sequential, deliberately —
+see "never parallelize scraping" in Troubleshooting). Only groups 2 and 9
+are actually driven by `config/sources.yaml`; everything else is a
+self-contained module with its own hardcoded URL list. Don't assume
+sources.yaml is the whole picture — most of the real source list lives in
+code, not YAML:
+
+1. `reliefweb.js` / `grantsgov.js` — API sources, config under `apis:` in
+   sources.yaml, both currently `enabled: false` (ReliefWeb needs a free
+   `appname` registration; Grants.gov RSS was deprecated)
+2. `rss.js` — feeds under `rss:` in sources.yaml (ImpactFunding Substack,
+   Bond UK, Devex, Climate Policy Initiative, Terra Viva Grants, etc.) —
+   global, not LAC-specific
+3. `fundsforngos.js` — hardcoded URLs, Cloudflare-limited (see Troubleshooting)
+4. `spanish-aggregators.js` + `usaid-grantsgov.js` — hardcoded URLs; **this
+   is the one group actually tied to a specific geography by construction**
+5. `foundations.js` — IAF, UNDP SGP, CEPF, Rainforest Trust; hardcoded,
+   all global/multi-country funders, not LAC-only
+6. `new-sources.js` — MAR Fund, HeroX, IDB, Mercociudades + static entries; hardcoded
+7. `portals.js` — WePropel, EasyGrant, Leaders of Today; hardcoded. Distinct
+   from any LinkedIn company page of the same name — don't confuse the two
+   when reading logs, they're unrelated sources that happen to share a name
+8. `email-outlook.js` — scans a folder of forwarded grant newsletters via
+   Microsoft Graph; one-time setup via `node scripts/auth-outlook.js` (see
+   `.env.example` for the required vars)
+9. `linkedin.js` — public company pages via Jina Reader, **no login/auth,
+   guest-view only** — fetch the company ROOT page (`/company/<slug>/`),
+   never `/posts/` or `/about/` (those hit LinkedIn's login wall even
+   through Jina Reader). Config under `linkedin:` in sources.yaml; add an
+   org by appending a `sources:` entry — no code changes needed
+
+Geography/theme relevance is a **scoring** concern (`org-profile.yaml`
+matched per-grant in `src/scorer/rules.js`), not a scraping-layer
+restriction — swapping `org-profile.yaml` for a different org/region
+changes what scores well without touching any scraper. Only group 4 above
+is hardcoded to a region; adding a new group in the same shape (a
+`fetch<Name>()` function returning grant objects, wired into
+`fetchAllGrants()`) works for any source, any region.
 
 ## Automation
 
