@@ -21,17 +21,67 @@ function ensureOutputDir() {
   }
 }
 
-function loadHistory() {
-  if (!fs.existsSync(HISTORY_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-  } catch (_) {
-    return {};
+// ── Safe read/write for the two hand-rolled "database" files below ─────────
+// history.json and grants_research.json are each a single JSON blob rewritten
+// on every run. Two failure modes matter more here than for a one-off script:
+// (1) this project has run from more than one machine against the same
+// OneDrive-synced folder, so a write racing with a not-yet-finished sync can
+// land a truncated/partial file; (2) a process killed mid-write (crash,
+// forced stop) leaves a half-written file. Previously, ANY parse failure
+// silently returned {} — meaning either failure mode would silently wipe the
+// entire dedup/research history and reprocess everything as new, with no
+// warning. Now: writes go to a temp file + atomic rename (a reader never
+// sees a partial write), a rolling `.bak` of the last known-good version is
+// kept, and a read failure falls back to it loudly instead of silently
+// resetting to empty.
+
+function atomicWriteJSON(filePath, data) {
+  ensureOutputDir();
+  const tmpPath = `${filePath}.tmp`;
+  const bakPath = `${filePath}.bak`;
+  fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+  if (fs.existsSync(filePath)) {
+    try {
+      fs.copyFileSync(filePath, bakPath);
+    } catch (err) {
+      console.error(`Warning: could not update backup ${bakPath}: ${err.message}`);
+    }
   }
+  fs.renameSync(tmpPath, filePath); // atomic on the same volume
+}
+
+function safeReadJSON(filePath, label) {
+  const bakPath = `${filePath}.bak`;
+  const fileExists = fs.existsSync(filePath);
+  const bakExists = fs.existsSync(bakPath);
+  if (!fileExists && !bakExists) return {}; // normal first-run case, no warning needed
+
+  if (fileExists) {
+    try {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (err) {
+      console.error(`Warning: ${label} at ${filePath} failed to parse (${err.message}).`);
+    }
+  }
+  if (bakExists) {
+    try {
+      const recovered = JSON.parse(fs.readFileSync(bakPath, 'utf8'));
+      console.error(`Warning: recovered ${label} from backup ${bakPath} — the main file was missing or corrupt. Investigate (possible concurrent write from another machine) before this run overwrites the backup too.`);
+      return recovered;
+    } catch (err) {
+      console.error(`Warning: ${label} backup at ${bakPath} also failed to parse (${err.message}).`);
+    }
+  }
+  console.error(`Warning: ${label} could not be loaded from either the main file or its backup — starting from empty. This will treat everything as new.`);
+  return {};
+}
+
+function loadHistory() {
+  return safeReadJSON(HISTORY_FILE, 'history.json');
 }
 
 function saveHistory(history) {
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+  atomicWriteJSON(HISTORY_FILE, history);
 }
 
 function isKnown(grant, history) {
@@ -80,17 +130,11 @@ function researchKey(grant) {
 }
 
 function loadResearchCache() {
-  if (!fs.existsSync(RESEARCH_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(RESEARCH_FILE, 'utf8'));
-  } catch (_) {
-    return {};
-  }
+  return safeReadJSON(RESEARCH_FILE, 'grants_research.json');
 }
 
 function saveResearchCache(cache) {
-  ensureOutputDir();
-  fs.writeFileSync(RESEARCH_FILE, JSON.stringify(cache, null, 2));
+  atomicWriteJSON(RESEARCH_FILE, cache);
 }
 
 function getResearch(grant, cache) {
