@@ -18,54 +18,14 @@
 
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
 const yaml = require('yaml');
 const { buildResearchPrompt } = require('./scorer/research-prompts');
 const { loadResearchCache, saveResearchCache, getResearch, setResearch } = require('./tracker/index');
+const { notionRequest, richText, notionPageToGrant, isResearchStale, agingBonus } = require('./notion-client');
 
 const OUTPUT_DIR = path.join(process.cwd(), 'output');
 const SCORED_FILE = path.join(OUTPUT_DIR, 'grants_scored.json');
 const PROFILE_PATH = path.join(process.cwd(), 'org-profile.yaml');
-
-// .env isn't auto-loaded anywhere globally in this codebase (only notion-sync.js
-// and email-outlook.js load it themselves) — needed here for the Notion backlog
-// query below. Mirrors notion-sync.js's own loadEnv() exactly.
-function loadEnv() {
-  const envPath = path.join(__dirname, '..', '.env');
-  if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
-    const m = line.match(/^([A-Z_]+)=(.+)$/);
-    if (m) process.env[m[1]] = m[2].trim();
-  }
-}
-loadEnv();
-
-function notionRequest(method, endpoint, body) {
-  return new Promise((resolve, reject) => {
-    const data = body ? JSON.stringify(body) : null;
-    const req = https.request({
-      hostname: 'api.notion.com',
-      path: `/v1/${endpoint}`,
-      method,
-      // agent: false — see the matching note in notion-sync.js's notionRequest;
-      // prevents Node's default keep-alive agent from holding the process open.
-      agent: false,
-      headers: {
-        'Authorization': `Bearer ${process.env.NOTION_TOKEN}`,
-        'Notion-Version': '2022-06-28',
-        'Content-Type': 'application/json',
-        ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
-      },
-    }, res => {
-      let raw = '';
-      res.on('data', c => raw += c);
-      res.on('end', () => { try { resolve(JSON.parse(raw)); } catch { resolve({ error: raw }); } });
-    });
-    req.on('error', reject);
-    if (data) req.write(data);
-    req.end();
-  });
-}
 
 const TIER_TO_RECOMMENDATION = {
   '🚀 Apply Now': 'APPLY_NOW', '⭐ Consider': 'CONSIDER', '👀 Monitor': 'MONITOR',
@@ -79,41 +39,13 @@ const TIER_TO_RECOMMENDATION_REVERSE = {
   INELIGIBLE: '⛔ Ineligible', SKIP: '⏭ Skip',
 };
 
-function richText(prop) {
-  return (prop?.rich_text || []).map(t => t.plain_text).join('') || null;
-}
-
-function parseAmount(amountStr) {
-  if (!amountStr) return { amount_min: null, amount_max: null };
-  const nums = amountStr.replace(/,/g, '').match(/\d+/g);
-  if (!nums) return { amount_min: null, amount_max: null };
-  if (nums.length >= 2) return { amount_min: parseInt(nums[0], 10), amount_max: parseInt(nums[1], 10) };
-  return { amount_min: null, amount_max: parseInt(nums[0], 10) };
-}
-
-function notionPageToGrant(page) {
-  const p = page.properties;
-  const title = p.Name?.title?.[0]?.plain_text || '(untitled)';
-  const { amount_min, amount_max } = parseAmount(richText(p.Amount));
-  return {
-    title,
-    funder: richText(p.Funder) || title,
-    source: richText(p.Source) || 'Notion (historical backlog)',
-    url: p.URL?.url || null,
-    country: richText(p.Country),
-    themes: (p.Themes?.multi_select || []).map(t => t.name),
-    amount_min, amount_max,
-    deadline: p.Deadline?.date?.start || null,
-    description: [
-      richText(p['Application Angle']) ? `Application angle (from prior scoring): ${richText(p['Application Angle'])}` : null,
-      richText(p['Best Projects']) ? `Best-fit Sustenta projects: ${richText(p['Best Projects'])}` : null,
-      richText(p['Score Breakdown']) ? `Score breakdown: ${richText(p['Score Breakdown'])}` : null,
-      richText(p['Deadline Note']) ? `Deadline note: ${richText(p['Deadline Note'])}` : null,
-    ].filter(Boolean).join('\n'),
-    type: 'grant',
-    _notion_page_id: page.id,
-  };
-}
+// isResearchStale (imported above, from notion-client.js): a research
+// result used to be treated as authoritative FOREVER — a grant researched
+// once as MONITOR stayed MONITOR in Notion even if a later rescan pushed
+// its formula score into Apply-Now territory (found in an audit 2026-08-18:
+// a grant sitting at 4.21 with its Tier still pinned to an old Monitor
+// verdict). Now it's only trusted forever until it's stale (old AND the
+// score moved a lot) — see notion-client.js for the exact rule.
 
 // Ricardo, 2026-08-09: local grants_scored.json only ever holds the CURRENT
 // run's freshly-scanned grants (it's overwritten every scan) — it has no
@@ -137,17 +69,25 @@ async function fetchNotionBacklog(alreadyHaveFingerprints) {
       for (const page of resp.results) {
         const tierName = page.properties?.Tier?.select?.name;
         const recommendation = TIER_TO_RECOMMENDATION[tierName];
-        const researched = page.properties?.['Deep Researched']?.checkbox ?? false;
-        if (!recommendation || researched) continue;
+        if (!recommendation) continue;
+        const currentScore = page.properties?.Score?.number ?? 0;
+        const researchedAt = page.properties?.['Last Researched']?.date?.start || null;
+        const researchedAtScore = page.properties?.['Researched At Score']?.number ?? null;
+        if (researchedAt && !isResearchStale({ researched_at: researchedAt, scored_at_score: researchedAtScore }, currentScore)) {
+          continue; // researched, and not stale enough yet to re-research
+        }
         const grant = notionPageToGrant(page);
         if (alreadyHaveFingerprints.has(grant.url || grant.title)) continue;
         out.push({
           grant,
-          scoring: {
-            final_score: page.properties?.Score?.number ?? 0,
-            recommendation,
-            days_remaining: null,
-          },
+          scoring: { final_score: currentScore, recommendation, days_remaining: null },
+          // Status is Ricardo's manual field (notion-sync.js) — setting it to
+          // "Priority" is how he tells the pipeline "I already know this one
+          // matters, research it next cycle regardless of score" (root cause
+          // 2 below: pure top-score-wins meant a 2.55 could never win against
+          // same-day 4.2-scorers, no matter how many cycles it waited).
+          pinned: grant._status === 'Priority',
+          scanDate: grant._scan_date,
         });
       }
       cursor = resp.has_more ? resp.next_cursor : null;
@@ -192,6 +132,15 @@ global.profile = profile;
  */
 global.saveResearchResults = async function saveResearchResults(results) {
   const saved = [];
+  // For the staleness check (isResearchStale above): what did this grant
+  // score AT THE TIME of this research, so a future rescan can tell whether
+  // it's drifted enough to be worth re-researching. Looked up from
+  // global.researchTargets (set once candidate selection finishes) rather
+  // than widening this function's own parameter — results only ever come
+  // back as { grant, report, result } per the external contract above.
+  const scoreAtResearchTime = new Map(
+    (global.researchTargets || []).map(t => [t.grant.url || t.grant.title, t.scoring.final_score])
+  );
 
   for (const { grant, report, result } of results) {
     let recommendation = result.recommendation;
@@ -213,7 +162,10 @@ global.saveResearchResults = async function saveResearchResults(results) {
       timingDowngraded = true;
     }
 
-    const entry = { ...result, recommendation, timing_downgraded: timingDowngraded, report };
+    const entry = {
+      ...result, recommendation, timing_downgraded: timingDowngraded, report,
+      scored_at_score: scoreAtResearchTime.get(grant.url || grant.title) ?? null,
+    };
     setResearch(grant, entry, researchCache);
     saved.push({ grant, entry });
 
@@ -236,6 +188,11 @@ global.saveResearchResults = async function saveResearchResults(results) {
             'Research Status': { select: { name: researchStatus } },
             'Research Summary': { rich_text: [{ text: { content: (report || '').slice(0, 1900) } }] },
             Tier: { select: { name: tierName } },
+            // Staleness bookkeeping (see isResearchStale above) — without
+            // these, a backlog-sourced grant researched once stays excluded
+            // from re-research forever, even after its score moves a lot.
+            'Last Researched':      { date: { start: new Date().toISOString().split('T')[0] } },
+            'Researched At Score':  { number: entry.scored_at_score ?? null },
           },
         });
         if (resp.object !== 'page') {
@@ -269,23 +226,49 @@ global.saveResearchResults = async function saveResearchResults(results) {
 // research.js` run as a plain script (step 2) naturally waits for this to
 // complete before the process exits, since Node doesn't exit while a promise
 // is pending. ─────────────────────────────────────────────────────────────
+// Ricardo, 2026-08-18: pure "sort by score, take top N" meant a grant that
+// scored 2.55 or 2.5 could NEVER win a slot — it was competing against
+// same-day 4.2-scorers every single cycle, forever, no matter how many
+// times the pipeline ran (this is what an audit found happening to the
+// CTCN/AFCIA and Social Shifters entries: both real Monitor-tier candidates,
+// both perpetually starved). Two fixes, not mutually exclusive:
+//   - a manual pin (Status = "Priority" in Notion) always gets a slot,
+//     since Ricardo already knowing something matters is a stronger signal
+//     than the formula
+//   - an aging bonus for everything else, so a grant that's been waiting in
+//     the Notion backlog across multiple cycles gradually catches up to
+//     fresh high scorers instead of being permanently outranked by them.
+//     Local same-day candidates get zero bonus (scanDate is today either
+//     way) — aging is specifically about NOT losing to today's arrivals
+//     forever, not about beating them on day one.
+const PINNED_SLOTS = 2;
+
 (async () => {
   const localCandidates = scored
     .filter(item => RESEARCH_ELIGIBLE.includes(item.scoring.recommendation))
-    .filter(item => !getResearch(item.grant, researchCache));
+    .filter(item => {
+      const cached = getResearch(item.grant, researchCache);
+      return !cached || isResearchStale(cached, item.scoring.final_score);
+    });
 
   const localFingerprints = new Set(localCandidates.map(i => i.grant.url || i.grant.title));
   const backlogCandidates = await fetchNotionBacklog(localFingerprints);
 
   const allEligible = [...localCandidates, ...backlogCandidates];
-  const candidates = allEligible
-    .sort((a, b) => b.scoring.final_score - a.scoring.final_score)
-    .slice(0, limit);
+  const ranked = [...allEligible].sort((a, b) =>
+    (b.scoring.final_score + agingBonus(b.scanDate)) - (a.scoring.final_score + agingBonus(a.scanDate))
+  );
+
+  const pinned = ranked.filter(i => i.pinned).slice(0, PINNED_SLOTS);
+  const pinnedKeys = new Set(pinned.map(i => i.grant.url || i.grant.title));
+  const rest = ranked.filter(i => !pinnedKeys.has(i.grant.url || i.grant.title));
+  const candidates = [...pinned, ...rest].slice(0, limit);
 
   console.log(`\n=== Grant-Ops: Deep Research ===`);
   console.log(`Organization: ${profile.organization.name}`);
   console.log(`Eligible (${RESEARCH_ELIGIBLE.join('/')}) grants: ${allEligible.length} (${localCandidates.length} from today's scan, ${backlogCandidates.length} from Notion backlog)`);
-  console.log(`Selected for this run (top ${limit}): ${candidates.length}`);
+  if (pinned.length) console.log(`Manually pinned (Status=Priority), always included: ${pinned.length}`);
+  console.log(`Selected for this run (top ${limit}, pinned first): ${candidates.length}`);
 
   if (!candidates.length) {
     console.log(`\nNothing new to research. Every ${RESEARCH_ELIGIBLE.join('/')} grant already has a cached research result.`);

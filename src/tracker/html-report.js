@@ -1,6 +1,6 @@
 /**
  * html-report.js
- * Clean, minimal HTML dashboard. Light theme with Sustenta brand accent.
+ * Clean, minimal HTML dashboard. Light theme, org-agnostic.
  */
 
 'use strict';
@@ -194,16 +194,18 @@ body {
   align-items: center;
   gap: 10px;
 }
-.topbar-logo {
-  height: 24px;
-  width: auto;
-}
 .topbar-name {
   font-family: var(--font-head);
   font-size: 0.9rem;
   font-weight: 700;
   color: var(--accent);
   letter-spacing: -0.01em;
+}
+.topbar-org {
+  font-size: 0.75rem;
+  color: var(--text-muted, #888);
+  border-left: 1px solid var(--text-muted, #888);
+  padding-left: 10px;
 }
 .topbar-date { font-size: 0.75rem; color: var(--text-3); }
 
@@ -473,8 +475,8 @@ footer a { color: var(--accent); text-decoration: none; }
 
 <div class="topbar">
   <div class="topbar-brand">
-    <img class="topbar-logo" src="https://www.sustentahonduras.org/logo.png" alt="Sustenta Honduras" onerror="this.style.display='none'">
     <span class="topbar-name">Grant Radar</span>
+    <span class="topbar-org">${orgName}</span>
   </div>
   <span class="topbar-date">${date}</span>
 </div>

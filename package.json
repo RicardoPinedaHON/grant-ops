@@ -10,6 +10,7 @@
     "init":   "node src/cli.js init",
     "scan":   "node src/cli.js scan",
     "score":  "node src/cli.js score",
+    "near-miss": "node src/near-miss-check.js",
     "research": "node src/deep-research.js",
     "expand": "node src/cli.js expand",
     "report": "node src/cli.js report",

@@ -55,6 +55,10 @@ function braveSearch(query) {
         'Accept-Encoding':      'gzip',
         'X-Subscription-Token': BRAVE_KEY,
       },
+      // Without this, Node's default keep-alive agent holds the process
+      // open after the real work is done — same issue already fixed in
+      // notion-sync.js/deep-research.js (see CLAUDE.md troubleshooting).
+      agent: false,
     };
     const req = https.request(options, res => {
       const chunks = [];

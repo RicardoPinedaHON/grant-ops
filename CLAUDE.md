@@ -7,9 +7,13 @@ grant-ops is an AI-powered grant opportunity scanner for NGOs. It:
    LinkedIn company pages, an Outlook inbox, static/rolling calls)
 2. Pre-scores them using rule-based logic (geography, size, deadline, org type)
 3. Uses Claude to score mission alignment, competitive fit, and strategic fit
-4. Deep-researches the best-scored grants live (WebSearch/WebFetch) to confirm
+4. Runs a cheap near-miss validation gate on Skip-tier grants that scored
+   within 0.5 of the Monitor floor — one plain page fetch of the funder's own
+   site, re-judging fit against real text instead of a thin scraped
+   description (src/near-miss-check.js — see "Near-miss validation" below)
+5. Deep-researches the best-scored grants live (WebSearch/WebFetch) to confirm
    they're actually open and estimate reopening timing if closed
-5. Syncs everything to a Notion database — **Notion, not the local HTML
+6. Syncs everything to a Notion database — **Notion, not the local HTML
    report, is where Ricardo actually reviews and tracks grants day to day.**
    The report files still get generated as a secondary/offline artifact.
 
@@ -20,11 +24,12 @@ below) — most of the time nobody is watching this run live.
 
 ### Full pipeline (what the scheduled job runs)
 ```
-node src/cli.js run          ← scan.js -> run-scoring.js -> expand-now.js, chained
-node src/deep-research.js    ← prints research targets (see "Deep research" below)
-node src/notion-sync.js      ← pushes grants_scored.json + grants_research.json to Notion
+node src/cli.js run           ← scan.js -> run-scoring.js -> expand-now.js, chained
+node src/near-miss-check.js   ← re-judges borderline Skips against the funder's own page (see below)
+node src/deep-research.js     ← prints research targets (see "Deep research" below)
+node src/notion-sync.js       ← pushes grants_scored.json + grants_research.json to Notion
 ```
-This is exactly `.claude/skills/grant-full-pipeline/SKILL.md`'s 5-step sequence
+This is exactly `.claude/skills/grant-full-pipeline/SKILL.md`'s 7-step sequence
 — read that file for the authoritative step-by-step contract, including the
 "do not background anything, this is one headless turn" constraint.
 
@@ -42,8 +47,10 @@ No API key required; uses your existing Claude Code subscription.
 - `npm run scan` — fetch new grants only (skips already-seen)
 - `npm run scan:all` — re-fetch everything including already-seen grants
 - `npm run score` — score grants already in output/grants_prescored.json
-- `npm test` — 34 unit tests (LinkedIn parsing/dedup, amount/deadline
-  extraction, login-wall detection). No network calls, no API keys needed.
+- `npm test` — 59 unit tests (LinkedIn parsing/dedup, amount/deadline
+  extraction, login-wall detection, Outlook newsletter parsing, near-miss/
+  research-staleness/selection-fairness logic). No network calls, no API
+  keys needed.
 
 ## How to score grants (your task in score-with-claude.js)
 
@@ -72,22 +79,79 @@ Tiers (src/scorer/index.js): `final_score` ≥ 3.8 → APPLY_NOW, ≥ 3.2 → CO
 scholarship-only, course-not-grant, VC-only, news article, no specific
 opportunity, conference-not-grant) forces INELIGIBLE regardless of score.
 
+## Near-miss validation
+
+Added 2026-08-18 after an audit (prompted by Ricardo pasting a Monday.com/
+Notion cross-check that found six real candidates going nowhere) traced why:
+`Halton "Indoor Environmental Quality Grants"` and `GEF SGP CSO Challenge`
+were both stuck at SKIP with `mission_alignment` near zero, for grants
+literally about PM2.5/particulates — Sustenta's core focus area. Cause: they
+arrived via RSS/LinkedIn/portal aggregators, which hand the scorer a thin
+one-line description (only `foundations.js`'s hand-written entries get the
+funder's real text) — and the scoring prompt's own "don't score high just
+because a keyword matches" guard then defaults to doubt when it's denied the
+detail that would show the real fit. Since SKIP was permanently excluded
+from deep research, there was no mechanism to ever revisit that verdict.
+
+`src/near-miss-check.js` is the fix, and it's deliberately NOT deep research:
+it queries Notion directly (not `grants_scored.json` — by the time this
+stage runs, every SKIP-tier grant from today's scan is already a Notion page
+too, so one query reaches both today's arrivals and the existing backlog)
+for Skip-tier grants scoring within 0.5 of the Monitor floor
+(`MONITOR_THRESHOLD` in `src/scorer/index.js`) that haven't been checked yet,
+capped at 8/run. For each, it does ONE plain HTTPS GET of the funder's own
+URL (`fetchPageText` — no Playwright, no WebFetch tool call; this needs to
+run cheaply inside the headless pipeline too) and re-judges ONLY
+mission_alignment/competitive_fit against that real text via
+`buildNearMissRecheckPrompt` (`src/scorer/prompts.js`) — not open/closed
+status, not funder history, none of what makes full deep research
+expensive. `buildSyntheticPrescore()` reconstructs an equivalent prescore
+object from Notion's stored "Score Breakdown" text so the recheck reuses
+`combineScores()` — the exact same combining logic as normal scoring —
+instead of a parallel formula that could drift out of sync with it.
+Read `=== NEAR_MISS_TARGETS_JSON ===` from stdout, answer each
+`recheck_prompt` (subagents are fine, no web tools needed), then call
+`global.saveNearMissResults([{ grant, prescoreLike, result }, ...])`.
+Anything that crosses the Monitor floor is now eligible for deep research,
+same run. A candidate whose URL fails to fetch gets marked checked anyway
+(cost control — no infinite retry on a permanently-broken link) and just
+stays SKIP.
+
 ## Deep research
 
-`src/deep-research.js` picks the best-scored APPLY_NOW/CONSIDER/MONITOR
-grants that don't have cached research yet (capped at 5/run for cost
-control) and exposes them for Claude Code to research live with
-WebSearch/WebFetch — no third-party search API, no API key.
+`src/deep-research.js` picks APPLY_NOW/CONSIDER/MONITOR grants that either
+have no cached research yet, OR whose research has gone stale
+(`isResearchStale()` in `src/notion-client.js`: researched 90+ days ago AND
+the formula score has since moved ≥0.5 — added 2026-08-18 after finding a
+grant sitting at 4.21 with its Notion Tier still pinned to an old MONITOR
+verdict; a research result used to be trusted forever, which is how that
+happened). Capped at 5/run for cost control, and exposes them for Claude
+Code to research live with WebSearch/WebFetch — no third-party search API,
+no API key.
 
 Candidates come from **two places, merged**: today's freshly-scanned
 `grants_scored.json`, AND a live query against the Notion database for
-past-scored grants that were never researched. This second source matters —
-`grants_scored.json` is overwritten every scan and has no memory of past
-runs, so without the Notion query the scheduled job would only ever research
-that day's brand-new arrivals and the historical backlog would never drain.
-(This surfaced a real 78-grant backlog on 2026-08-09 that had been sitting
-in Notion, scored well, for weeks with zero research — see git log for the
-fix.)
+past-scored grants that were never researched (or are stale per above).
+This second source matters — `grants_scored.json` is overwritten every scan
+and has no memory of past runs, so without the Notion query the scheduled
+job would only ever research that day's brand-new arrivals and the
+historical backlog would never drain. (This surfaced a real 78-grant
+backlog on 2026-08-09 that had been sitting in Notion, scored well, for
+weeks with zero research — see git log for the fix.)
+
+**Selection is pinned-first, then score+aging — not pure top-score-wins**
+(changed 2026-08-18: the same audit found `CTCN/AFCIA` at 2.55 and a
+non-duplicate `Social Shifters` row at 2.5, both genuinely Monitor-eligible,
+both permanently starved because they were competing against same-day
+4.2-scorers every single cycle — no number of cycles waiting ever let them
+win a slot). Up to `PINNED_SLOTS` (2) candidates whose Notion `Status` is
+manually set to `"Priority"` always get a slot regardless of score — that's
+how Ricardo tells the pipeline "I already know this one matters." Everything
+else is ranked by `final_score + agingBonus(scanDate)`
+(`src/notion-client.js`) — a small bonus that grows the longer a backlog
+grant has been waiting, capped at +1.0. Local same-day candidates get zero
+bonus; aging only helps things that keep losing to newer arrivals cycle
+after cycle, it doesn't help a fresh grant jump the queue on day one.
 
 Run it, then read `=== RESEARCH_TARGETS_JSON ===` from stdout (not the JS
 `global.researchTargets` — that only works if you `require()` the file in
@@ -107,42 +171,21 @@ contract (same mechanism, triggered on request instead of automatically).
 
 ## Scoring guidance
 
-The NGO (Sustenta Honduras) focuses on:
-- **Air quality monitoring** — PM2.5 network, 18 departments, policy advocacy
-- **Circular economy** — waste valorization, green jobs in rural Honduras
-- **Indigenous forest protection** — La Mosquitia, early warning systems
-- **Youth climate leadership** — youth-led research, decarbonization strategy
-- **Water governance** — municipal networks, watershed management
+**The most important rule: theme match ≠ competitive fit.** A grant can be
+thematically related but structurally wrong. Always ask: "Who actually wins
+this grant, and does this org look like that organization?"
 
-### The most important rule: theme match ≠ competitive fit
+All of the org-specific substance that used to live in this section — focus
+areas, which grants deserve strong vs. moderate mission scores, exact
+competitive_fit penalties per funder type, strategic_fit adjustments — now
+lives entirely in `org-profile.yaml`'s `competitive_context` block
+(`realistic_win_profile`, `hard_gaps`, `structural_flags`). That file is
+gitignored and per-org by design; `src/scorer/prompts.js::buildGapsBlock()`
+reads it and injects it straight into the Claude scoring prompt, so it's
+already live for every scoring run — nothing here needs to duplicate it.
 
-A grant can be thematically related but structurally wrong. Always ask:
-**"Who actually wins this grant, and does Sustenta look like that organization?"**
-
-**Apply strong mission scores (≥1.0) AND competitive_fit 0.0 when:**
-- Grant explicitly funds air quality monitoring, PM2.5, environmental data networks
-- Grant explicitly targets youth-led organizations in LAC/Honduras — Sustenta qualifies as youth-led
-- Grant supports indigenous community rights + environmental defenders in Mesoamerica
-- Grant funds circular economy or green jobs in developing countries (small NGO track)
-- Funder is already in Sustenta's network (SIDA, EU, UNDP, embassies) — prior relationship = advantage
-
-**Apply moderate mission scores (0.6–0.9) when:**
-- Grant is broad climate/environment, not specifically monitoring/youth
-- Grant is development-focused with clear environmental component
-
-**competitive_fit penalties — apply these hard:**
-- **-0.5 (MAR Fund, reef/coastal funds):** Grant requires coastal/marine/reef conservation experience. Sustenta has NO coastal portfolio. Would compete against actual marine biology organizations.
-- **-0.35 to -0.4 (DIV, GIF, MIT Solve, innovation scale funds):** Funder requires proven scale (reaching thousands+), RCTs, cost-effectiveness data, or "innovation packaging." Sustenta is 13 people with $51K max grant — structurally not this profile.
-- **-0.35 (AECID, Spanish cooperation as lead):** Structural barrier — requires Spanish ONGD registration. Sustenta can only be local partner, not lead applicant.
-- **-0.3 (agrifood/commercial supply chain funds):** GAFSP, DDF, commodity traceability programs favor commercial agribusiness actors. Not Sustenta's world.
-- **-0.2 (US Embassy PDS / public diplomacy):** Only fits if the proposal centers a visible U.S.-Honduras collaboration element. Generic climate proposal would be weak.
-- **-0.2 (large institutional calls >$500K needing consortium):** Sustenta can participate but needs a strong lead partner — downgrade solo application scoring.
-
-**strategic_fit adjustments:**
-- +0.1 if funder already in previous_funders list
-- +0.05 if call explicitly targets small NGOs or youth-led organizations
-- -0.1 if matching funds required >15%
-- -0.1 if grant is highly competitive with strong institutional bias (Solve, Echoing Green — hundreds of applicants, bias toward established names)
+If you're scoring interactively and want to see the actual hard gaps/flags
+in effect, read `org-profile.yaml` directly rather than this file.
 
 ## Sources
 
@@ -206,7 +249,7 @@ already been marked trusted via an *interactive* `claude` session (run
 the live process reverts it. This is a real, previously-hit failure mode
 when migrating this project to a new machine, not a hypothetical.
 
-**Do not run this pipeline from two machines against the same OneDrive-synced
+**Do not run this pipeline from two machines against the same cloud-synced
 project folder at once.** `output/history.json` (dedup state) is a plain
 JSON file, not a database — two processes writing it around the same time
 silently lose each other's writes, producing confusing/inconsistent "new

@@ -12,6 +12,7 @@ const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
 const { grantFingerprint } = require('./utils/grant-fingerprint');
+const { isResearchStale } = require('./notion-client');
 
 function loadEnv() {
   const envPath = path.join(__dirname, '..', '.env');
@@ -85,6 +86,18 @@ async function ensureSchema() {
       { name: 'Open' }, { name: 'Closed' }, { name: 'Could not confirm' },
     ] } },
     'Research Summary':   { rich_text: {} },
+    // Staleness bookkeeping (2026-08-18) — a research verdict used to be
+    // authoritative forever (see effectiveRecommendation below); these let
+    // deep-research.js tell "researched, and still fresh" apart from
+    // "researched a while ago, and the score has moved a lot since" for
+    // Notion-backlog candidates it doesn't hold in its own local cache.
+    'Last Researched':     { date: {} },
+    'Researched At Score': { number: {} },
+    // Near-miss validation gate (src/near-miss-check.js) — separate from
+    // deep research: one cheap page fetch to re-judge fit for grants that
+    // scored SKIP by a narrow margin on a thin scraped description, not a
+    // live open/closed investigation.
+    'Near-Miss Checked':   { checkbox: {} },
   };
   const toCreate = Object.fromEntries(
     Object.entries(needed).filter(([name]) => !existing.includes(name))
@@ -143,9 +156,14 @@ const INELIGIBLE_FLAGS = [
 // Deep research (src/deep-research.js) is more authoritative than the
 // surface-level rule+Claude score — it actually checked the funder's live
 // page, past grantees, and current open/closed status. When a research
-// result exists for a grant, its recommendation wins over scoring's.
+// result exists for a grant, its recommendation wins over scoring's —
+// UNLESS that research has gone stale (old, AND the fresh score has since
+// moved a lot — see notion-client.js's isResearchStale). Otherwise a grant
+// researched once as Monitor stayed pinned to Monitor in Notion forever,
+// even after a later rescan pushed it into Apply-Now territory.
 function effectiveRecommendation(scoring, research) {
-  return research?.recommendation || scoring.recommendation;
+  if (research && !isResearchStale(research, scoring.final_score)) return research.recommendation;
+  return scoring.recommendation;
 }
 
 function tierLabel(scoring, research) {
@@ -257,6 +275,8 @@ function buildProperties(grant, scoring, research, isCreate) {
       'Likelihood %':     { number: research.likelihood_percent ?? null },
       'Research Status':  { select: { name: researchStatusName } },
       'Research Summary': { rich_text: [{ text: { content: (research.report || '').slice(0, 1900) } }] },
+      ...(research.researched_at ? { 'Last Researched': { date: { start: research.researched_at.split('T')[0] } } } : {}),
+      ...(research.scored_at_score != null ? { 'Researched At Score': { number: research.scored_at_score } } : {}),
     } : {}),
     ...(isCreate ? { Status: { select: { name: 'New' } } } : {}),
     'Scan Date': { date: { start: today } },

@@ -7,18 +7,19 @@ deep-researches the best matches live, and syncs everything to a Notion
 database (plus a self-contained HTML report). No API key required for any
 of it — scoring and research both run inside your Claude Code session.
 
-Region- and sector-agnostic by design — nothing in the codebase is LAC/Honduras-specific. Your org's focus areas, geography, grant-size range, and funder history all come from one `org-profile.yaml`, and sources come from one `config/sources.yaml`; swap either and the same pipeline works for a health NGO in Southeast Asia or a housing nonprofit in the US. This particular deployment happens to be configured for a Honduran environmental/youth-climate NGO — see "Adapting for your NGO" below for how little that has to do with the code.
+Region- and sector-agnostic by design — nothing in the codebase is tied to any one country or cause. Your org's focus areas, geography, grant-size range, and funder history all come from one `org-profile.yaml`, and sources come from one `config/sources.yaml`; swap either and the same pipeline works for a health NGO in Southeast Asia or a housing nonprofit in the US. See "Adapting for your NGO" below for how to point it at your own org.
 
 ---
 
 ## How it works
 
 ```
-Sources → Scrapers → Pre-score (rules) → AI scoring → Deep research → Notion + HTML report
-              ↓                                              ↑
-     Newsletter digests                          Live WebSearch/WebFetch,
-     opened + expanded                           only for the best-scored,
-     into individual grants                      not-yet-researched grants
+Sources → Scrapers → Pre-score (rules) → AI scoring → Near-miss gate → Deep research → Notion + HTML report
+              ↓                                              ↑              ↑
+     Newsletter digests                       One cheap page fetch    Live WebSearch/WebFetch,
+     opened + expanded                        for borderline Skips,   only for the best-scored,
+     into individual grants                   before that verdict     not-yet-researched grants
+                                               is treated as final
 ```
 
 1. **Fetches** grants from RSS feeds, Playwright scrapers, public LinkedIn
@@ -31,11 +32,19 @@ Sources → Scrapers → Pre-score (rules) → AI scoring → Deep research → 
    news article, no specific opportunity, conference-not-grant)
 4. **Scores** mission alignment, competitive fit, and strategic fit using
    Claude Code (no API key — runs inside your Claude Code session)
-5. **Deep-researches** the best-scored, not-yet-researched grants live —
-   confirms whether a call is actually still open and, if closed, estimates
-   when it's likely to reopen — again via Claude Code's own WebSearch/WebFetch,
-   no third-party search API
-6. **Syncs** everything to a Notion database (tier, score, research status,
+5. **Validates near-misses** — grants that scored Skip by a narrow margin
+   often did so on a thin one-line scraped description, not the funder's
+   own text. One plain page fetch re-judges fit against the real thing
+   before that Skip is treated as final, cheaper than full deep research
+6. **Deep-researches** the best-scored, not-yet-researched (or gone-stale)
+   grants live — confirms whether a call is actually still open and, if
+   closed, estimates when it's likely to reopen — again via Claude Code's
+   own WebSearch/WebFetch, no third-party search API. Selection is
+   pinned-first (mark anything `Priority` in Notion to guarantee it a slot)
+   then score plus a small bonus for how long a grant's been waiting, not
+   pure top-score-wins — otherwise a real but modest candidate can lose to
+   fresh high scorers every single cycle, forever
+7. **Syncs** everything to a Notion database (tier, score, research status,
    likelihood %) and outputs a self-contained HTML report with filters for
    each priority tier
 
@@ -78,9 +87,10 @@ Copy `.env.example` to `.env` and fill in `NOTION_TOKEN`/`NOTION_DB_ID` (Notion 
 npx grant-ops run
 ```
 
-Runs scan → score → expand digests. For deep research + Notion sync too, see
-`node src/deep-research.js` and `node src/notion-sync.js`, or just ask Claude
-Code to run the full cycle — it knows the sequence from `CLAUDE.md`.
+Runs scan → score → expand digests. For the near-miss gate, deep research,
+and Notion sync too, see `node src/near-miss-check.js`,
+`node src/deep-research.js`, and `node src/notion-sync.js`, or just ask
+Claude Code to run the full cycle — it knows the sequence from `CLAUDE.md`.
 
 ### Step by step
 
@@ -222,10 +232,10 @@ Two prerequisites the task won't work without:
    `.claude/settings.json`'s permission allow-list is silently ignored in
    headless (`claude -p`) mode and every command auto-denies with no prompt
    to approve it. Hand-editing `~/.claude.json` does not reliably work.
-2. **Only run this on one machine at a time** against a given
-   OneDrive-synced copy of the project — `output/history.json` isn't a
-   database, and two machines writing it concurrently silently lose each
-   other's dedup state.
+2. **Only run this on one machine at a time** against a given cloud-synced
+   copy of the project (OneDrive, Dropbox, etc.) — `output/history.json`
+   isn't a database, and two machines writing it concurrently silently
+   lose each other's dedup state.
 
 Logs go to `logs/pipeline_run.log` (top-level summary per run) and
 `output/logs/scan_*.log` / `scoring_*.log` (full per-grant audit trail —
@@ -249,10 +259,15 @@ To score grants:
 2. Open the project in Claude Code
 3. Ask Claude: "score the grants" — it reads `output/grants_prescored.json` and scores each one
 
+To validate near-misses (grants that scored Skip on a thin description):
+1. Run `node src/near-miss-check.js` — it fetches each candidate's funder page and prints recheck prompts
+2. Ask Claude Code to re-judge fit against that real text (no web search needed, the page text is included)
+3. Anything that crosses the Monitor floor becomes eligible for real deep research next
+
 To deep-research the best matches:
-1. Run `node src/deep-research.js` — it prints the top not-yet-researched candidates and their research prompts
+1. Run `node src/deep-research.js` — it prints the top not-yet-researched (or gone-stale) candidates and their research prompts
 2. Ask Claude Code to research them (spawns one subagent per grant, in parallel)
-3. Results get cached forever by grant fingerprint and synced to Notion
+3. Results are cached and synced to Notion — trusted until they're 90+ days old AND the score has moved a lot, not forever
 
 For fully automated rule-based scoring (used by `npx grant-ops score` and `npx grant-ops run`), `src/scorer/manual-scorer.js` handles all grants without any AI call — Claude Code is for the higher-fidelity mission/competitive/strategic scoring pass and for deep research specifically.
 
@@ -269,8 +284,10 @@ grant-ops/
 │   ├── run-scoring.js          # Rule-based scoring pipeline
 │   ├── expand-now.js           # Digest expansion (standalone)
 │   ├── score-with-claude.js    # Claude Code session scorer
-│   ├── deep-research.js        # Deep-research target selection + Notion backlog + save
+│   ├── near-miss-check.js      # Cheap re-check of borderline Skips against the funder's own page
+│   ├── deep-research.js        # Deep-research target selection (pinned+aging) + Notion backlog + save
 │   ├── notion-sync.js          # Push scored/researched grants to Notion
+│   ├── notion-client.js        # Shared Notion read helpers + staleness/aging logic
 │   ├── logger.js               # Structured per-run audit log (output/logs/)
 │   ├── scorer/
 │   │   ├── rules.js            # Pre-scoring rules + hard ineligibility filter

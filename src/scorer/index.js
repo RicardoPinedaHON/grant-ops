@@ -16,6 +16,7 @@ const SKIP_THRESHOLD = 1.5;
 // A grant needs both strong thematic alignment AND realistic win probability for APPLY_NOW.
 const RECOMMEND_THRESHOLD = 3.8;
 const CONSIDER_THRESHOLD = 3.2;
+const MONITOR_THRESHOLD = 2.5;
 
 // Flags that make a grant INELIGIBLE (not just Skip, a hard NO)
 const INELIGIBLE_FLAGS = [
@@ -69,7 +70,7 @@ function combineScores(prescore, claudeResponse) {
     recommendation = 'APPLY_NOW';
   } else if (finalScore >= CONSIDER_THRESHOLD) {
     recommendation = 'CONSIDER';
-  } else if (finalScore >= 2.5) {
+  } else if (finalScore >= MONITOR_THRESHOLD) {
     recommendation = 'MONITOR';
   } else {
     recommendation = 'SKIP';
@@ -167,4 +168,5 @@ module.exports = {
   SKIP_THRESHOLD,
   RECOMMEND_THRESHOLD,
   CONSIDER_THRESHOLD,
+  MONITOR_THRESHOLD,
 };

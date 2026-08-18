@@ -179,6 +179,14 @@ function buildId(url, title) {
 
 // ── Title → funder heuristic ──────────────────────────────────────────────────
 function guessFunder(title) {
+  // ImpactShip-style titles are usually "Grant Title – Funder Name" — the
+  // dash-separated suffix IS the funder and takes priority over the
+  // Grant/Fund/Award keyword guess below, which otherwise grabs words from
+  // the title itself (e.g. "Social & Criminal Justice Grants – Charles
+  // Hayward Foundation" was guessing "Social & Criminal Justice", never
+  // seeing the real funder after the dash).
+  const dashSplit = title.match(/^(.+?)\s+[–—-]\s+(.+)$/);
+  if (dashSplit) return dashSplit[2].trim();
   const m = title.match(/^(.+?)\s+(?:Grant|Fund|Award|Program|Programme|Fellowship|Prize|Call|Scholarship)/i);
   return m ? m[1].trim() : title.split(/\s+/).slice(0, 3).join(' ');
 }
@@ -203,8 +211,12 @@ function parseGrantBlocks(text, source, emailDate) {
   const lines    = text.split('\n').map(l => l.trim()).filter(Boolean);
   const seenUrls = new Set();
 
-  const FIELD_RE  = /^(funding|amount|award|eligibility|description|deadline|due\s*date|link|url)[:：]\s*/i;
-  const GRANT_KEY = /deadline[:：]|funding[:：]|award[:：]/i;
+  const FIELD_RE     = /^(funding|amount|award|eligibility|description|deadline|due\s*date|link|url)[:：]\s*/i;
+  // Unanchored twin of FIELD_RE, used to locate a field label wherever it
+  // starts within a line (not just at position 0) — see the inline-title
+  // check below.
+  const FIELD_RE_ANY = /(funding|amount|award|eligibility|description|deadline|due\s*date|link|url)[:：]\s*/i;
+  const GRANT_KEY    = /deadline[:：]|funding[:：]|award[:：]/i;
 
   function isTitle(line) {
     return (
@@ -258,13 +270,32 @@ function parseGrantBlocks(text, source, emailDate) {
 
     // ── Format A: pipe-separated detail line ─────────────────────────────────
     if (GRANT_KEY.test(line) && /\|/.test(line)) {
-      const parts = line.split(/\s*\|\s*/);
+      // Occasionally the title lands on the SAME line as the first field
+      // instead of its own line above (an HTML-to-text artifact — e.g.
+      // "2027 RISK Award – ... Funding: Up to €100,000 | Eligibility: ...").
+      // If so, split it off here rather than searching backward, which
+      // would otherwise land on some unrelated earlier title and silently
+      // drop this grant (while corrupting whichever title it borrowed).
+      let effectiveLine = line;
+      let inlineTitle = null;
+      const firstField = line.match(FIELD_RE_ANY);
+      if (firstField && firstField.index > 0) {
+        const prefix = line.slice(0, firstField.index).trim();
+        if (isTitle(prefix)) {
+          inlineTitle = prefix;
+          effectiveLine = line.slice(firstField.index);
+        }
+      }
+
+      const parts = effectiveLine.split(/\s*\|\s*/);
       const fields = fieldsFromParts(parts);
 
-      // Title: nearest preceding non-field line
-      let title = null;
-      for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
-        if (isTitle(lines[j])) { title = lines[j]; break; }
+      // Title: inline title takes priority; else nearest preceding non-field line
+      let title = inlineTitle;
+      if (!title) {
+        for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
+          if (isTitle(lines[j])) { title = lines[j]; break; }
+        }
       }
       if (!title) continue;
 
@@ -294,6 +325,138 @@ function parseGrantBlocks(text, source, emailDate) {
   }
 
   return grants;
+}
+
+// ── Format C: Funding Forward / Fast Forward (HubSpot template) ───────────────
+/**
+ * "Funding Forward" (ffwd.org / Fast Forward) sends a HubSpot newsletter with
+ * no field labels at all — after htmlToText() it collapses into one dense
+ * paragraph of entries shaped like:
+ *
+ *   [Region] Funder Name: Grant Title: Description sentence(s) ending in
+ *   either "Apply by <Month Day>." / "Submit ... by <Month Day>." or
+ *   "Applications accepted on a rolling basis."
+ *
+ * A second "UPCOMING DEADLINES" section repeats the same shape (sometimes
+ * with an "Apply by <date> - " prefix before the bracket, which we just skip
+ * since the same date is restated inside the sentence). Region tags seen so
+ * far: [Global], [U.S.], [D.C.], [Southern U.S.], but any bracket contents
+ * work — this only recognizes the shape, not a fixed tag list.
+ */
+const FF_REGION_MAP = {
+  'u.s.': 'United States',
+  'southern u.s.': 'United States',
+  'd.c.': 'United States',
+  'global': 'Global',
+};
+
+function ffExtractDeadline(desc, emailDate) {
+  if (/applications?\s+accepted\s+on\s+a\s+rolling\s+basis|rolling\s+basis/i.test(desc)) return 'rolling';
+  const m = desc.match(/(?:apply|submit(?:\s+(?:a\s+)?(?:concept\s+note|letter\s+of\s+inquiry|loi))?)\s+by\s+([A-Za-z]+)\s+(\d{1,2})/i);
+  if (!m) return null;
+  const mo = MONTH_NAMES[m[1].toLowerCase()];
+  if (!mo) return null;
+  const day = parseInt(m[2], 10);
+  const refDate = emailDate ? new Date(emailDate) : new Date();
+  let year = refDate.getUTCFullYear();
+  // If this date would fall more than ~2 months before the email date, the
+  // newsletter almost certainly means next year (e.g. a January newsletter
+  // mentioning a "December" deadline for the following cycle).
+  const candidate = new Date(Date.UTC(year, mo - 1, day));
+  if (candidate.getTime() < refDate.getTime() - 60 * 24 * 60 * 60 * 1000) year += 1;
+  return `${year}-${String(mo).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+// Description text that mentions a dollar figure as applicant-eligibility
+// criteria ("organizations with annual budgets between $750K and $3M") isn't
+// the award amount — exclude $ matches whose nearby context looks like that.
+const FF_NOT_AWARD_CONTEXT = /budget|revenue|\bFTE\b|annual operating/i;
+
+function ffExtractAmounts(desc) {
+  const matches = [...desc.matchAll(/[$€]\s?([\d][\d,.]*)\s?([KkMm])?/g)]
+    .filter(m => !FF_NOT_AWARD_CONTEXT.test(desc.slice(Math.max(0, m.index - 40), m.index)))
+    .map(m => {
+      const mult = /m/i.test(m[2] || '') ? 1_000_000 : /k/i.test(m[2] || '') ? 1000 : 1;
+      return parseFloat(m[1].replace(/,/g, '')) * mult;
+    })
+    .filter(n => !isNaN(n));
+  if (matches.length === 0) return { amount_min: null, amount_max: null };
+  if (matches.length === 1) return { amount_min: null, amount_max: matches[0] };
+  return { amount_min: Math.min(...matches), amount_max: Math.max(...matches) };
+}
+
+// A colon-delimited segment right after "[Tag] " is a second header segment
+// (a distinct grant title, e.g. "Stanley 1913: Creators Fund: Seeks...")
+// only if it doesn't itself read like the start of the description sentence.
+const FF_DESCRIPTION_STARTER = /^(seeks?|supports?|invites?|offers?|provides?|funds?|awards?|selected|applications?|submit|open|includes?|eligible|grants?|brings?)\b/i;
+
+function ffSplitHeader(block) {
+  const seg1 = block.match(/^([^:\n]{2,90}?):\s*/);
+  if (!seg1) return null;
+  const rest1 = block.slice(seg1[0].length);
+  const seg2 = rest1.match(/^([^:\n]{2,90}?):\s*/);
+  if (seg2 && !FF_DESCRIPTION_STARTER.test(seg2[1]) && !/\.\s/.test(seg2[1])) {
+    return { funder: seg1[1].trim(), title: seg2[1].trim(), description: rest1.slice(seg2[0].length).trim() };
+  }
+  return { funder: seg1[1].trim(), title: seg1[1].trim(), description: rest1.trim() };
+}
+
+// Boilerplate/footer sections use the same "[Tag]"-free prose, but a block
+// can still run into them when it's the last bracket in the email — cut the
+// description off at the first one of these rather than including them.
+const FF_STOP_MARKERS = /TECH NONPROFIT SHOUTOUTS|Have something to share\?|Fast Forward,\s*\d/;
+
+function parseFundingForwardBlocks(text, source, emailDate) {
+  const grants = [];
+  const seen = new Set();
+  const brackets = [...text.matchAll(/\[([^\]\n]{2,30})\]/g)];
+
+  for (let i = 0; i < brackets.length; i++) {
+    const tag = brackets[i][1];
+    const start = brackets[i].index + brackets[i][0].length;
+    let end = i + 1 < brackets.length ? brackets[i + 1].index : text.length;
+    const stop = text.slice(start, end).search(FF_STOP_MARKERS);
+    if (stop !== -1) end = start + stop;
+
+    const block = text.slice(start, end).trim();
+    const parsed = block ? ffSplitHeader(block) : null;
+    if (!parsed || !parsed.description) continue;
+
+    const key = `${parsed.funder}::${parsed.title}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const country = FF_REGION_MAP[tag.trim().toLowerCase()] || tag.trim();
+    const deadline = ffExtractDeadline(parsed.description, emailDate);
+    const { amount_min, amount_max } = ffExtractAmounts(parsed.description);
+    // extractUrl() covers the rare case the newsletter inlines a bare URL;
+    // this template mostly uses "More info here"-style link text with the
+    // real target only in the <a href>, which htmlToText() strips — grants
+    // without a resolvable URL still get created (id falls back to title).
+    const url = extractUrl(parsed.description);
+
+    grants.push({
+      source,
+      id: buildId(url, `${parsed.funder}: ${parsed.title}`),
+      title: parsed.title,
+      description: parsed.description.slice(0, 500),
+      url: url || '',
+      funder: parsed.funder,
+      deadline,
+      amount_min,
+      amount_max,
+      country,
+      themes: [],
+      type: 'email',
+      fetched_at: emailDate || new Date().toISOString(),
+    });
+  }
+
+  return grants;
+}
+
+function isFundingForwardSender(sender) {
+  return /ffwd\.org|fast forward|funding forward/i.test(sender || '');
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
@@ -360,7 +523,9 @@ async function fetchEmailGrants() {
     const sender = msg.from?.emailAddress?.name || msg.from?.emailAddress?.address || 'Unknown';
     const source = `Email: ${sender}`;
     const text   = htmlToText(msg.body?.content || '');
-    const grants = parseGrantBlocks(text, source, msg.receivedDateTime);
+    const grants = isFundingForwardSender(sender)
+      ? parseFundingForwardBlocks(text, source, msg.receivedDateTime)
+      : parseGrantBlocks(text, source, msg.receivedDateTime);
 
     console.log(`    "${(msg.subject || '').slice(0, 60)}" → ${grants.length} grant(s)`);
     allGrants.push(...grants);
@@ -374,4 +539,4 @@ async function fetchEmailGrants() {
   return allGrants;
 }
 
-module.exports = { fetchEmailGrants };
+module.exports = { fetchEmailGrants, parseGrantBlocks, parseFundingForwardBlocks, isFundingForwardSender };
