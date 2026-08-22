@@ -1,14 +1,35 @@
 ---
 name: grant-full-pipeline
-description: Runs the entire Grant Ops cycle unattended — scan (all sources incl. LinkedIn) → rule-based score → Notion sync → near-miss validation gate for borderline Skips → deep-research the top-scored eligible grants → re-sync Notion with research tags. Built for the every-2-days scheduled run; also usable interactively.
+description: Runs the entire Grant Ops cycle unattended — scan (all sources incl. LinkedIn) → REAL Claude scoring for every freshly-prefiltered grant → Notion sync → near-miss validation gate for borderline Skips → deep-research the top-scored eligible grants → re-sync Notion with research tags. Built for the every-2-days scheduled run; also usable interactively.
 ---
 
 # Grant Ops — Full Pipeline (autonomous)
 
 This is the ONE skill the scheduled job (`run-full-pipeline.bat`, every 2 days)
 invokes via `claude -p`. It chains every existing piece — nothing here
-duplicates logic that already lives in scan.js / run-scoring.js /
+duplicates logic that already lives in scan.js / score-with-claude.js /
 deep-research.js / notion-sync.js.
+
+**2026-08-22 — real Claude scoring is now step 1, not `node src/cli.js run`.**
+An audit that day found the automated pipeline had ALWAYS scored via
+`run-scoring.js` → `manual-scorer.js` — a hardcoded/keyword fallback that
+returns literal boilerplate like *"Grant from newsletter but no strong
+thematic match with Sustenta's focus areas"* for anything outside its
+hardcoded funder list. The real per-grant reasoning engine
+(`src/scorer/prompts.js`'s `buildScoringPrompt`, with the full NGO profile +
+hard-gaps rubric) only ever ran when Ricardo manually said "score the
+grants" — the scheduled job silently skipped it every single cycle, for as
+long as it had existed. `manual-scorer.js`/`run-scoring.js`/`cli.js run`
+still exist and still work (for `npm run score`, other users of this tool
+without a live Claude session, etc.) — just don't use them for THIS
+automated run anymore. See CLAUDE.md's "Automated Claude scoring" section
+for the full incident writeup.
+
+Known residual gap: `expand-now.js` (step 1d below) still scores newly
+digest-expanded grants internally via `manual-scorer.js`, not this real
+pass — digest volume has been low/zero on most runs so far, but don't
+assume digest-expanded grants got the same quality of judgment as the main
+batch until that's also fixed.
 
 **Ricardo's standing instruction (2026-08-07): when this runs on schedule, do
 NOT ask for approval or pause for confirmation at any step. Proceed straight
@@ -26,12 +47,59 @@ later turn. If a step is slow, that's fine — just wait for it.
 
 ## Steps — run in this exact order
 
-1. `node src/cli.js run`
-   Runs scan.js (fetches all sources, LinkedIn included automatically —
-   config/sources.yaml's `linkedin.enabled: true` is permanent, no code
-   changes needed to keep it running) → run-scoring.js (rule-based score +
-   an immediate Notion sync that already tags any previously-cached deep
-   research) → expand-now.js.
+1. Four sub-steps — scan, REAL Claude scoring, sync, expand:
+
+   **1a.** Run `node src/scan.js`. Fetches all 9 source groups (LinkedIn
+   included automatically — `config/sources.yaml`'s `linkedin.enabled: true`
+   is permanent) and writes `output/grants_prescored.json`, one entry per
+   grant with a `.claude_prompt` field ready for real scoring. Does NOT
+   score or touch Notion itself.
+      - If LinkedIn shows 0/7 (or otherwise all-failed) sources succeeding,
+        that's a known transient failure pattern specifically tied to this
+        script firing right at the top of the hour (Jina Reader shared-IP
+        congestion at popular cron times — confirmed 2026-08-22 by testing
+        the identical code minutes later at a non-round time and getting
+        7/7). This is *why* the schedule was moved to 5:17am instead of
+        5:00am — don't assume LinkedIn is actually broken just because one
+        run failed; do flag it if it fails at 5:17 too, since that would
+        mean the theory is wrong.
+
+   **1b.** Run `node src/score-with-claude.js`. Prints `Grants to score: N`
+   and the list of titles with prompts. Read `output/grants_prescored.json`
+   yourself (or use `global.prescored`, set if you `require()` this file
+   directly rather than running it as a subprocess) — for EVERY item with a
+   `claude_prompt`, actually read that prompt and produce genuine per-grant
+   judgment: `{ mission_alignment, competitive_fit, strategic_fit,
+   best_projects, application_angle, confidence, reasoning }`. Set
+   `_ineligible: true` on anything that isn't really an org-level grant at
+   all (an internship, an individual fellowship, a webinar/workshop, a paid
+   course ad, a consultancy contract, a vendor marketing post, an
+   aggregator's own blog post about grants in general — these show up
+   constantly from RSS/LinkedIn/email sources and the pre-filter doesn't
+   catch all of them). This is the whole point of this step — do not paste
+   in placeholder/generic reasoning; if two grants are actually different,
+   their reasoning should read differently.
+      Since this needs a second process to persist (same reason every
+      other step here does): write a small temp script (e.g.
+      `save-scores-temp.js` at the repo root) that does
+      `const { scoreOneGrant, saveScoredGrants } = require('./src/score-with-claude.js')`,
+      loads `grants_prescored.json` and `org-profile.yaml` itself, maps your
+      responses array through `scoreOneGrant(item, response)`, and calls
+      `saveScoredGrants(scored, profile)` — then `node save-scores-temp.js`
+      and delete the temp file afterward. (`global.saveResults`/
+      `global.scoreOne` only exist when this file is run directly as the
+      main module, not when `require()`'d from a driver script — use the
+      exported `scoreOneGrant`/`saveScoredGrants` functions instead, they're
+      the same underlying logic.)
+
+   **1c.** Run `node src/notion-sync.js`. Pushes the real-scored
+   `grants_scored.json` (plus any previously-cached deep research) to
+   Notion.
+
+   **1d.** Run `node src/expand-now.js`. Opens any ImpactFunding digest
+   items found in `grants_scored.json` and extracts individual grants —
+   these get scored via `manual-scorer.js` internally (the known residual
+   gap noted above), then synced to Notion by this script itself.
 
 2. Run `node src/near-miss-check.js`. Added 2026-08-18 after an audit found
    real candidates (Halton "Indoor Environmental Quality Grants", GEF SGP CSO

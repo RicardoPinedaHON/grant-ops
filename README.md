@@ -75,7 +75,7 @@ npx grant-ops init
 
 This asks you ~15 questions and creates your `org-profile.yaml`. You can also copy `org-profile.example.yaml` and fill it in manually.
 
-Copy `.env.example` to `.env` and fill in `NOTION_TOKEN`/`NOTION_DB_ID` (Notion sync), `BRAVE_SEARCH_KEY` (optional deadline/amount enrichment), and `GRAPH_CLIENT_ID`/`GRAPH_TENANT_ID` (optional Outlook inbox scanning — run `node scripts/auth-outlook.js` once to authenticate).
+Copy `.env.example` to `.env` and fill in `NOTION_TOKEN`/`NOTION_DB_ID` (Notion sync), `BRAVE_SEARCH_KEY` (optional deadline/amount enrichment), `GRAPH_CLIENT_ID`/`GRAPH_TENANT_ID` (optional Outlook inbox scanning — run `node scripts/auth-outlook.js` once to authenticate), and `JINA_API_KEY` (optional — only needed if the LinkedIn source hits Jina Reader's anonymous rate limit; a free key at [jina.ai/reader](https://jina.ai/reader) fixes it, no payment required).
 
 ---
 

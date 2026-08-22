@@ -1,7 +1,11 @@
 @echo off
-REM Runs the entire Grant Ops cycle unattended (scan incl. LinkedIn -> score
-REM -> Notion sync -> deep research top-scored eligible grants -> re-sync).
-REM Scheduled every 2 days via the "GrantOps Full Pipeline" task.
+REM Runs the entire Grant Ops cycle unattended (scan incl. LinkedIn -> REAL
+REM Claude scoring -> Notion sync -> near-miss gate -> deep research -> re-sync).
+REM Scheduled every 2 days at 5:17am via the "GrantOps Full Pipeline" task
+REM (moved off 5:00am on 2026-08-22 -- LinkedIn's Jina Reader calls fail
+REM specifically at round cron times, shared-IP congestion). A companion
+REM task, "GrantOps Pipeline Validate" (run-pipeline-validate.bat), fires
+REM 2 hours later to catch/finish a hung run -- see CLAUDE.md Troubleshooting.
 REM Uses .claude/settings.json's permission allow-list (Bash node/npm, Read,
 REM Write, Edit, WebSearch, WebFetch, Agent, Task) so it never stops to ask
 REM for approval -- per Ricardo's instruction (2026-08-07).

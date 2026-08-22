@@ -7,6 +7,8 @@ grant-ops is an AI-powered grant opportunity scanner for NGOs. It:
    LinkedIn company pages, an Outlook inbox, static/rolling calls)
 2. Pre-scores them using rule-based logic (geography, size, deadline, org type)
 3. Uses Claude to score mission alignment, competitive fit, and strategic fit
+   for every freshly-prefiltered grant, automatically, every cycle — this
+   wasn't actually true until 2026-08-22 (see "Automated Claude scoring")
 4. Runs a cheap near-miss validation gate on Skip-tier grants that scored
    within 0.5 of the Monitor floor — one plain page fetch of the funder's own
    site, re-judging fit against real text instead of a thin scraped
@@ -24,24 +26,33 @@ below) — most of the time nobody is watching this run live.
 
 ### Full pipeline (what the scheduled job runs)
 ```
-node src/cli.js run           ← scan.js -> run-scoring.js -> expand-now.js, chained
+node src/scan.js              ← fetches all sources, writes grants_prescored.json
+node src/score-with-claude.js ← REAL Claude scoring for every item (see "Automated Claude scoring")
+node src/notion-sync.js       ← pushes grants_scored.json + grants_research.json to Notion
+node src/expand-now.js        ← expands newsletter digests (still manual-scorer.js internally)
 node src/near-miss-check.js   ← re-judges borderline Skips against the funder's own page (see below)
 node src/deep-research.js     ← prints research targets (see "Deep research" below)
-node src/notion-sync.js       ← pushes grants_scored.json + grants_research.json to Notion
 ```
 This is exactly `.claude/skills/grant-full-pipeline/SKILL.md`'s 7-step sequence
 — read that file for the authoritative step-by-step contract, including the
-"do not background anything, this is one headless turn" constraint.
+"do not background anything, this is one headless turn" constraint. Note this
+is NOT the same as `node src/cli.js run` (below) — that command still exists
+and still works, but as of 2026-08-22 the automated pipeline no longer uses
+it, because its `run-scoring.js` step never gave real Claude judgment.
 
 ### Individual steps
 ```
 node src/scan.js          ← fetches grants, pre-scores, saves grants_prescored.json
-node src/run-scoring.js   ← rule-based scoring (fast, no AI key needed) + a Notion sync
+node src/run-scoring.js   ← CHEAP FALLBACK: rule-based scoring only (manual-scorer.js,
+                             no AI, no real per-grant judgment) — used by `npm run score`
+                             and `cli.js run`, NOT by the automated pipeline anymore
 ```
 
-`score-with-claude.js` is the AI-assisted path — open it inside Claude Code and say
-"score the grants". Claude Code reads each `claude_prompt` field and scores natively.
-No API key required; uses your existing Claude Code subscription.
+`score-with-claude.js` is the real AI-scoring path — see "Automated Claude
+scoring" below and "How to score grants" for the exact contract. No API key
+required; uses your existing Claude Code subscription. This is now used both
+interactively ("score the grants") AND automatically by the scheduled
+pipeline (`.claude/skills/grant-full-pipeline/SKILL.md` step 1b).
 
 ### Quick commands
 - `npm run scan` — fetch new grants only (skips already-seen)
@@ -67,17 +78,66 @@ After running scan.js, load `output/grants_prescored.json`. For each item:
      "best_projects": ["project name"],
      "application_angle": "one sentence or null",
      "confidence": "high|medium|low",
-     "reasoning": "2-3 sentences: what specifically helps AND hurts"
+     "reasoning": "2-3 sentences: what specifically helps AND hurts",
+     "_ineligible": true  // OPTIONAL — set this if the item isn't really an
+                           // org-level grant at all (individual fellowship,
+                           // internship, webinar/workshop, paid course ad,
+                           // consultancy contract, vendor marketing post, an
+                           // aggregator's own blog post about grants) — these
+                           // slip past the pre-filter constantly from RSS/
+                           // LinkedIn/email sources and forcing INELIGIBLE
+                           // here is more honest than a low-but-nonzero score
    }
    ```
-4. Use `combineScores(item.prescore, yourResponse)` from `src/scorer/index.js`
+4. Use `scoreOneGrant(item, yourResponse)` from `src/score-with-claude.js`
+   (wraps `combineScores` — same thing, this is what has test coverage)
 5. Collect all results into `scoredGrants` array
-6. Call `saveMarkdownReport(scoredGrants, profile)` and `saveTSV(scoredGrants)`
+6. Call `saveScoredGrants(scoredGrants, profile)` — writes `grants_scored.json`
+   plus the TSV/Markdown/HTML reports in one call (see "Automated Claude
+   scoring" below for how this actually gets invoked headlessly, since
+   `global.scoreOne`/`global.saveResults` only exist when this file runs as
+   the main module — a driver script needs the exported functions instead)
 
 Tiers (src/scorer/index.js): `final_score` ≥ 3.8 → APPLY_NOW, ≥ 3.2 → CONSIDER,
 ≥ 2.5 → MONITOR, else SKIP. Any hard-ineligibility flag (wrong geography,
 scholarship-only, course-not-grant, VC-only, news article, no specific
-opportunity, conference-not-grant) forces INELIGIBLE regardless of score.
+opportunity, conference-not-grant) forces INELIGIBLE regardless of score —
+`_ineligible: true` above is the AI-scoring-time equivalent of those
+rule-based flags, for cases only visible once you actually read the grant.
+
+## Automated Claude scoring
+
+Added/fixed 2026-08-22. Until this date, the scheduled pipeline had **never
+once** used real Claude judgment to score a grant — `.claude/skills/grant-
+full-pipeline/SKILL.md`'s step 1 ran `node src/cli.js run`, which chains
+`run-scoring.js` → `manual-scorer.js`, a hardcoded/keyword-heuristic fallback
+that returns the literal string `"Grant from newsletter but no strong
+thematic match with Sustenta's focus areas."` for anything outside its
+hardcoded funder list. That's what every single automated cycle produced,
+silently, for as long as the scheduled job had existed — caught live when
+Ricardo asked why results felt slow/low-quality and a manual re-scoring pass
+of that day's 19 grants immediately surfaced a real $300K Australia-LAC
+environmental program (COALAR) at MONITOR with a genuine application angle,
+and correctly flagged 6 of the 19 as not-actually-grants (an internship, an
+individual fellowship, a webinar, a paid course ad, a consultancy contract,
+a vendor marketing post) that the cheap scorer had left as generic low-score
+SKIPs instead.
+
+The fix: the pipeline's step 1 now runs `scan.js` alone (not `cli.js run`),
+then `score-with-claude.js` for real per-grant judgment on every item, then
+`notion-sync.js`, then `expand-now.js` — see the SKILL.md for the exact
+sub-steps (1a-1d) including the "write a temp driver script, since
+`require()`-ing this file from another process doesn't get you the
+interactive-session globals" mechanics. `run-scoring.js`/`manual-scorer.js`/
+`cli.js run` are unchanged and still valid for other uses (`npm run score`,
+someone using this tool without a live Claude session) — they're just no
+longer what the automated cycle uses.
+
+**Known residual gap**: `expand-now.js` still scores newly digest-expanded
+grants via `manual-scorer.js` internally, not this real pass. Digest volume
+has been low-to-zero on most runs so far ("nothing to expand" is the common
+case), so this wasn't fixed in the same pass — don't assume digest-expanded
+grants got real judgment until this is addressed too.
 
 ## Near-miss validation
 
@@ -231,15 +291,28 @@ is hardcoded to a region; adding a new group in the same shape (a
 
 ## Automation
 
-The scheduled job (`run-full-pipeline.bat`, registered as the Windows Task
-"GrantOps Full Pipeline", every 2 days) invokes `claude -p` with
-`.claude/skills/grant-full-pipeline/SKILL.md` as the instructions — that
-skill chains scan → score → deep-research → Notion sync with **no pauses for
-confirmation** (Ricardo's standing instruction, scoped to this unattended
-run only — normal interactive sessions still ask as usual). Its own file
-header explains why every step must run in the foreground with nothing
-backgrounded: this is a single headless turn with no continuation, so a
-backgrounded step never finishes.
+Two scheduled jobs, both every 2 days, both Windows Task Scheduler tasks
+invoking `claude -p`:
+
+1. **"GrantOps Full Pipeline"** (`run-full-pipeline.bat`) at **5:17am** —
+   `.claude/skills/grant-full-pipeline/SKILL.md`'s scan → real Claude
+   scoring → Notion sync → near-miss gate → deep-research → re-sync
+   sequence, with **no pauses for confirmation** (Ricardo's standing
+   instruction, scoped to this unattended run only — normal interactive
+   sessions still ask as usual).
+2. **"GrantOps Pipeline Validate"** (`run-pipeline-validate.bat`) at
+   **7:17am**, 2 hours later — `.claude/skills/grant-pipeline-validate/
+   SKILL.md` checks whether job 1 actually completed (it can hang after
+   finishing its real work — see Troubleshooting) and finishes it if not.
+
+Both were moved off the top of the hour on 2026-08-22 (was 5:00am) after
+confirming LinkedIn's Jina Reader calls fail specifically at round cron
+times (shared-IP congestion) but work fine minutes later with identical
+code — an off-minute schedule avoids that congestion window entirely.
+
+Both skills' own file headers explain why every step must run in the
+foreground with nothing backgrounded: each is a single headless turn with
+no continuation, so a backgrounded step never finishes.
 
 **Trust prerequisite**: `.claude/settings.json`'s permission allow-list only
 takes effect in headless (`claude -p`) mode if this project folder has
@@ -297,6 +370,16 @@ Edit `config/sources.yaml`:
 - **Grants.gov API timeout**: Normal — retry with `npm run scan`
 - **Empty RSS feed**: Check if the RSS URL is still active in `config/sources.yaml`
 - **Playwright fails**: Run `npx playwright install chromium` to reinstall browser
+- **LinkedIn scraping asks for a "paid API" / mentions Jina**: this is Jina
+  Reader (`r.jina.ai`), the anonymous fetcher `src/scrapers/linkedin.js`
+  uses to read public company pages — not something grant-ops itself
+  requires payment for. No key is needed for normal/light use; the message
+  only shows up once you hit Jina's anonymous per-IP rate limit. Fix: get a
+  FREE key (no payment) at https://jina.ai/reader and set `JINA_API_KEY` in
+  `.env` (documented in `.env.example`), or just set `linkedin.enabled:
+  false` in `config/sources.yaml` and skip LinkedIn entirely — every other
+  source still works. (Undocumented until 2026-08-21 — a friend of
+  Ricardo's hit this with no explanation anywhere in the repo.)
 - **A LinkedIn source shows 0 posts every run**: check for a login-wall — the
   guest-view root page occasionally still redirects; `isLoginWall()` in
   `src/scrapers/linkedin.js` should catch it and log a `[LinkedIn] <name>
@@ -309,8 +392,14 @@ Edit `config/sources.yaml`:
   `src/scorer/index.js`'s `module.exports` still exports `SKIP_THRESHOLD`
   and `isNewsArticle` (this broke once already — see git log 2026-08-09 —
   and silently mislabeled every low-score grant as `NEWS_ARTICLE`).
-- **Notion sync or deep-research process hangs after finishing its real
-  work**: both scripts pass `agent: false` on their `https.request()` calls
-  to Notion to avoid Node's default keep-alive agent holding the process
-  open. If you see this again despite that fix, it wasn't conclusively
-  reproduced/confirmed as the root cause — worth a closer look.
+- **Notion sync, run-scoring, or deep-research process hangs after finishing
+  its real work**: `agent: false` is set on the Notion `https.request()`
+  calls to avoid Node's default keep-alive agent holding the process open,
+  but this has reproduced multiple times since (2026-08-18, 2026-08-22)
+  despite that fix — not conclusively root-caused yet (Playwright's
+  `closeBrowser()` and the Brave Search client are other suspects). In the
+  unattended scheduled run this is serious: everything after the stuck step
+  silently never runs. The "GrantOps Pipeline Validate" task (see
+  Automation) exists specifically to catch and recover from this 2 hours
+  later — check `logs/pipeline_run.log` for its "Validation check:" entries
+  if a cycle looks like it produced less than expected.
