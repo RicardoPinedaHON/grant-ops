@@ -22,6 +22,7 @@ const yaml = require('yaml');
 const { buildResearchPrompt } = require('./scorer/research-prompts');
 const { loadResearchCache, saveResearchCache, getResearch, setResearch } = require('./tracker/index');
 const { notionRequest, richText, notionPageToGrant, isResearchStale, agingBonus } = require('./notion-client');
+const { grantsMatch } = require('./utils/grant-fingerprint');
 
 const OUTPUT_DIR = path.join(process.cwd(), 'output');
 const SCORED_FILE = path.join(OUTPUT_DIR, 'grants_scored.json');
@@ -56,9 +57,26 @@ const TIER_TO_RECOMMENDATION_REVERSE = {
 // when this was widened). Pulling directly from Notion — the durable
 // record — is what actually makes the scheduled pipeline drain that
 // backlog over time (still capped at `limit` per run for cost control).
+// Ricardo, 2026-08-22: the SAME real program routinely gets scraped from
+// its own site AND from an aggregator/repost under a completely different
+// domain (e.g. "Youth Climate Justice Fund (YCJF) 2026" at ycjf.org vs.
+// "Fondos de YCJF..." at gestionandote.org) — grantFingerprint() gives these
+// structurally incompatible keys (domain-based vs. acronym/title-based), so
+// they were never recognized as the same grant. Confirmed live: both got
+// independently deep-researched the same day, wasting two of the capped
+// research slots on one real opportunity. Changing grantFingerprint() itself
+// is too risky (it's the persisted Notion identity key for the whole
+// database — a format change would make every existing page look "new" on
+// its next sync and mass-duplicate them). Instead, this collects every
+// already-researched grant's {title, url} while scanning the database
+// anyway, and cross-checks new candidates against it with the looser,
+// pairwise grantsMatch() (shared acronym or ≥60% title-word overlap) before
+// they're ever offered as research targets — a narrower, safe fix scoped to
+// exactly where the waste happens.
 async function fetchNotionBacklog(alreadyHaveFingerprints) {
   if (!process.env.NOTION_TOKEN || !process.env.NOTION_DB_ID) return [];
   const out = [];
+  const researchedGrants = [];
   let cursor;
   try {
     do {
@@ -67,6 +85,12 @@ async function fetchNotionBacklog(alreadyHaveFingerprints) {
       const resp = await notionRequest('POST', `databases/${process.env.NOTION_DB_ID}/query`, body);
       if (!resp.results) break;
       for (const page of resp.results) {
+        if (page.properties?.['Deep Researched']?.checkbox) {
+          researchedGrants.push({
+            title: page.properties?.Name?.title?.[0]?.plain_text || '',
+            url: page.properties?.URL?.url || '',
+          });
+        }
         const tierName = page.properties?.Tier?.select?.name;
         const recommendation = TIER_TO_RECOMMENDATION[tierName];
         if (!recommendation) continue;
@@ -95,7 +119,24 @@ async function fetchNotionBacklog(alreadyHaveFingerprints) {
   } catch (err) {
     console.error('Notion backlog query failed (continuing with local candidates only):', err.message);
   }
-  return out;
+
+  const deduped = filterAlreadyResearchedDuplicates(out, researchedGrants);
+  const skipped = out.length - deduped.length;
+  if (skipped > 0) console.log(`  Filtered ${skipped} likely-duplicate-of-already-researched candidate(s) before selection.`);
+  return deduped;
+}
+
+// Extracted as a pure function purely for test coverage — see the comment
+// above fetchNotionBacklog for the full incident this exists to prevent.
+function filterAlreadyResearchedDuplicates(candidates, researchedGrants) {
+  return candidates.filter(item => {
+    const dupe = researchedGrants.find(rg => grantsMatch(item.grant, rg));
+    if (dupe) {
+      console.log(`  [dedup] Skipping "${item.grant.title.slice(0, 60)}" — looks like the same grant as already-researched "${dupe.title.slice(0, 60)}"`);
+      return false;
+    }
+    return true;
+  });
 }
 
 // Ricardo, 2026-08-09: broadened from ['APPLY_NOW', 'CONSIDER'] — the rule+Claude
@@ -243,7 +284,12 @@ global.saveResearchResults = async function saveResearchResults(results) {
 //     forever, not about beating them on day one.
 const PINNED_SLOTS = 2;
 
-(async () => {
+// Guarded so a plain require() (e.g. from a test importing
+// filterAlreadyResearchedDuplicates, or the two-process
+// `node -e "require(...); global.saveResearchResults(...)"` save pattern)
+// never fires a live Notion query as a side effect — only running this file
+// directly (`node src/deep-research.js`) does the actual candidate fetch.
+if (require.main === module) (async () => {
   const localCandidates = scored
     .filter(item => RESEARCH_ELIGIBLE.includes(item.scoring.recommendation))
     .filter(item => {
@@ -314,4 +360,4 @@ function appendResearchSection(saved) {
   return reportPath;
 }
 
-module.exports = { RESEARCH_ELIGIBLE, DEFAULT_LIMIT };
+module.exports = { RESEARCH_ELIGIBLE, DEFAULT_LIMIT, filterAlreadyResearchedDuplicates };

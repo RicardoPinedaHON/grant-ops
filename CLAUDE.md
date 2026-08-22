@@ -58,10 +58,11 @@ pipeline (`.claude/skills/grant-full-pipeline/SKILL.md` step 1b).
 - `npm run scan` — fetch new grants only (skips already-seen)
 - `npm run scan:all` — re-fetch everything including already-seen grants
 - `npm run score` — score grants already in output/grants_prescored.json
-- `npm test` — 59 unit tests (LinkedIn parsing/dedup, amount/deadline
+- `npm test` — 78 unit tests (LinkedIn parsing/dedup, amount/deadline
   extraction, login-wall detection, Outlook newsletter parsing, near-miss/
-  research-staleness/selection-fairness logic). No network calls, no API
-  keys needed.
+  research-staleness/selection-fairness logic, real-Claude-scoring prompt
+  building, duplicate-of-already-researched detection). No network calls,
+  no API keys needed.
 
 ## How to score grants (your task in score-with-claude.js)
 
@@ -188,6 +189,31 @@ verdict; a research result used to be trusted forever, which is how that
 happened). Capped at 5/run for cost control, and exposes them for Claude
 Code to research live with WebSearch/WebFetch — no third-party search API,
 no API key.
+
+**Duplicate-of-already-researched filter** (added 2026-08-22): the same real
+program routinely gets scraped from its own site AND from an aggregator
+repost under a completely different domain — confirmed live, "Youth Climate
+Justice Fund (YCJF) 2026" (ycjf.org) and "Fondos de YCJF..."
+(gestionandote.org) are the same funder, but `grantFingerprint()` gives them
+structurally incompatible identity keys (domain-based vs. acronym/title-
+based — see `src/utils/grant-fingerprint.js`), so they were never recognized
+as duplicates and both got independently deep-researched the same day,
+wasting a research slot. Fixing `grantFingerprint()` itself was ruled out —
+it's the persisted Notion identity key for the whole ~350-page database, and
+changing its format would make every existing page look "new" on its next
+sync and mass-duplicate them. Instead, `fetchNotionBacklog()` collects every
+already-researched grant's `{title, url}` while it scans the database
+anyway, and `filterAlreadyResearchedDuplicates()` cross-checks new
+candidates against that list with the looser, pairwise `grantsMatch()`
+(shared acronym or ≥60% title-word overlap, still year-aware) before they're
+ever offered as research targets. Live-confirmed catching "RELX
+Environmental Challenge" as a dupe of the already-researched "Relx
+Environmental Challenge 2025" the same day this shipped. Known pre-existing
+gap in `grantsMatch()` itself, not fixed: if two different years' rounds
+scrape to the EXACT same URL (a funder reusing one "how to apply" page
+year-round), the exact-URL-match check short-circuits before the
+year-differentiation logic runs, so they'd incorrectly match — see
+`test/deep-research.test.js`'s comment on this.
 
 Candidates come from **two places, merged**: today's freshly-scanned
 `grants_scored.json`, AND a live query against the Notion database for
@@ -366,6 +392,24 @@ Edit `config/sources.yaml`:
 
 ## Troubleshooting
 
+- **`npm test` silently overwrites real `output/` files**: `score-with-claude.js`
+  and `tracker/index.js` compute `OUTPUT_DIR` as a module-load-time constant
+  (`path.join(process.cwd(), 'output')`) — this happened for real 2026-08-22,
+  when a test did `process.chdir(tmpDir)` expecting `saveScoredGrants()` to
+  write there; it didn't, because `OUTPUT_DIR` was already baked in from the
+  first `require()`, so the test silently clobbered the REAL project's
+  `output/grants_scored.json` with dummy fixture data, which then flowed
+  into a live deep-research run as a fake "$4.0 APPLY_NOW" candidate before
+  anyone noticed. The fix in `test/score-with-claude.test.js` mocks
+  `fs.writeFileSync` instead of `chdir`-ing — if you're tempted to write a
+  new test for anything in `tracker/index.js` or `score-with-claude.js` that
+  touches disk, do NOT rely on `process.chdir()` to redirect it; mock `fs`
+  instead, or you will have the same bug again. Restoring real data after
+  this kind of corruption: `output/grants_prescored.json` is untouched by
+  the scoring step, so re-running the same scoring pass against it (or
+  re-deriving from Notion, which usually still has the pre-corruption sync)
+  is the recovery path — check file mtimes to confirm what's actually stale
+  before assuming anything is lost.
 - **fundsforNGOs returns 403**: Site has Cloudflare. Try running scan at a different time or reducing scraping frequency.
 - **Grants.gov API timeout**: Normal — retry with `npm run scan`
 - **Empty RSS feed**: Check if the RSS URL is still active in `config/sources.yaml`

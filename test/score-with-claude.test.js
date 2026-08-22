@@ -18,8 +18,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 
 const { scoreOneGrant, buildDistribution, saveScoredGrants } = require('../src/score-with-claude');
 
@@ -85,24 +83,40 @@ test('buildDistribution: tallies recommendations across scored grants', () => {
   assert.deepEqual(buildDistribution(scored), { APPLY_NOW: 1, MONITOR: 2, SKIP: 1 });
 });
 
-test('saveScoredGrants: writes grants_scored.json and returns real file paths', () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'grant-ops-score-test-'));
-  const cwdBefore = process.cwd();
-  fs.mkdirSync(path.join(tmpDir, 'output'));
-  process.chdir(tmpDir);
-  try {
-    const profile = { organization: { name: 'Test Org' } };
-    const scoredGrants = [
-      { grant: { title: 'A' }, scoring: { final_score: 4.0, recommendation: 'APPLY_NOW', scores: {}, best_projects: [], flags: [] } },
-      { grant: { title: 'B' }, scoring: { final_score: 2.0, recommendation: 'SKIP', scores: {}, best_projects: [], flags: [] } },
-    ];
-    const result = saveScoredGrants(scoredGrants, profile);
-    assert.ok(fs.existsSync(result.scoredFile));
-    const written = JSON.parse(fs.readFileSync(result.scoredFile, 'utf8'));
-    assert.equal(written.length, 2);
-    assert.deepEqual(result.distribution, { APPLY_NOW: 1, SKIP: 1 });
-  } finally {
-    process.chdir(cwdBefore);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
+test('saveScoredGrants: writes grants_scored.json and returns real file paths', (t) => {
+  // REGRESSION TEST for a real incident (2026-08-22): this test used to
+  // process.chdir() into a tmp dir before calling saveScoredGrants(),
+  // expecting it to write there. It doesn't — score-with-claude.js's
+  // `OUTPUT_DIR` (and tracker/index.js's, which saveTSV/saveMarkdownReport/
+  // saveHTMLReport all use) is a MODULE-LOAD-TIME constant
+  // (`path.join(process.cwd(), 'output')`), evaluated once when the module
+  // is first require()'d — chdir() afterward changes nothing. The result:
+  // this test silently overwrote the REAL project's output/grants_scored.json
+  // with dummy {title:"A"}/{title:"B"} fixture data, which then flowed into
+  // a real deep-research run as a fake "$4.0 APPLY_NOW" candidate before
+  // anyone noticed. Mock fs.writeFileSync instead of touching real paths —
+  // this is the only way to test this safely until OUTPUT_DIR stops being
+  // baked in at require time (a larger refactor touching tracker/index.js,
+  // not done here).
+  const writes = [];
+  t.mock.method(fs, 'writeFileSync', (filePath, content) => {
+    writes.push({ filePath: String(filePath), content: String(content) });
+  });
+  // ensureOutputDir() (called by saveTSV/saveMarkdownReport/saveHTMLReport)
+  // checks fs.existsSync/mkdirSync first — harmless against the real
+  // project's already-existing output/ dir, left unmocked on purpose.
+
+  const profile = { organization: { name: 'Test Org' } };
+  const scoredGrants = [
+    { grant: { title: 'Real Grant A' }, scoring: { final_score: 4.0, recommendation: 'APPLY_NOW', scores: {}, best_projects: [], flags: [] } },
+    { grant: { title: 'Real Grant B' }, scoring: { final_score: 2.0, recommendation: 'SKIP', scores: {}, best_projects: [], flags: [] } },
+  ];
+  const result = saveScoredGrants(scoredGrants, profile);
+
+  assert.deepEqual(result.distribution, { APPLY_NOW: 1, SKIP: 1 });
+  const scoredWrite = writes.find(w => w.filePath === result.scoredFile);
+  assert.ok(scoredWrite, 'saveScoredGrants must write to the path it returns as scoredFile');
+  const written = JSON.parse(scoredWrite.content);
+  assert.equal(written.length, 2);
+  assert.equal(written[0].grant.title, 'Real Grant A');
 });
