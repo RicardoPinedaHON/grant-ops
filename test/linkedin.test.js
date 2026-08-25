@@ -352,3 +352,40 @@ test('isLoginWall: detects the real login-wall fixture', () => {
 test('isLoginWall: does not flag the real company-page fixture', () => {
   assert.equal(li.isLoginWall(COMPANY_PAGE_MD), false);
 });
+
+// ── 10. Jina Reader error surfacing ──────────────────────────────────────────
+// Regression tests for a real incident (2026-08-24): axios's default thrown
+// error only exposes a generic "Request failed with status code 403" via
+// err.message, silently discarding Jina's actual JSON error body. That gap
+// is exactly why two prior LinkedIn outages (2026-08-20, 2026-08-22) got
+// misdiagnosed as "round-hour cron congestion" — the real cause (Jina's
+// shared anonymous-IP pool getting domain-wide blocked from linkedin.com by
+// some UNRELATED user's abusive scraping) was never actually visible in any
+// log until this fix.
+
+test('describeJinaError: surfaces the real AbuseAlleviationError detail, not a generic axios message', () => {
+  // Real response body captured live 2026-08-24.
+  const body = JSON.stringify({
+    data: null, code: 403, name: 'AbuseAlleviationError', status: 40305,
+    message: 'Anonymous access to domain www.linkedin.com blocked until Tue Aug 25 2026 04:36:07 GMT+0000 (Coordinated Universal Time) due to previous abuse found on http://www.linkedin.com/company/mount-pleasant-community-policing-centre: DDoS attack suspected: Too many requests',
+  });
+  const err = new Error('Request failed with status code 403');
+  err.response = { status: 403, data: body };
+  const described = li.describeJinaError(err);
+  assert.match(described, /AbuseAlleviationError/);
+  assert.match(described, /blocked until/);
+  assert.match(described, /nothing to do with our own request pattern|due to previous abuse/);
+});
+
+test('describeJinaError: falls back to status + generic message when the body isn\'t JSON', () => {
+  const err = new Error('Request failed with status code 500');
+  err.response = { status: 500, data: '<html>Internal Server Error</html>' };
+  const described = li.describeJinaError(err);
+  assert.match(described, /500/);
+});
+
+test('describeJinaError: falls back to err.message entirely for a plain network error (no response at all)', () => {
+  const err = new Error('timeout of 45000ms exceeded');
+  const described = li.describeJinaError(err);
+  assert.equal(described, 'timeout of 45000ms exceeded');
+});

@@ -58,11 +58,11 @@ pipeline (`.claude/skills/grant-full-pipeline/SKILL.md` step 1b).
 - `npm run scan` — fetch new grants only (skips already-seen)
 - `npm run scan:all` — re-fetch everything including already-seen grants
 - `npm run score` — score grants already in output/grants_prescored.json
-- `npm test` — 78 unit tests (LinkedIn parsing/dedup, amount/deadline
-  extraction, login-wall detection, Outlook newsletter parsing, near-miss/
-  research-staleness/selection-fairness logic, real-Claude-scoring prompt
-  building, duplicate-of-already-researched detection). No network calls,
-  no API keys needed.
+- `npm test` — 81 unit tests (LinkedIn parsing/dedup/Jina-error-diagnostics,
+  amount/deadline extraction, login-wall detection, Outlook newsletter
+  parsing, near-miss/research-staleness/selection-fairness logic,
+  real-Claude-scoring prompt building, duplicate-of-already-researched
+  detection). No network calls, no API keys needed.
 
 ## How to score grants (your task in score-with-claude.js)
 
@@ -331,10 +331,17 @@ invoking `claude -p`:
    SKILL.md` checks whether job 1 actually completed (it can hang after
    finishing its real work — see Troubleshooting) and finishes it if not.
 
-Both were moved off the top of the hour on 2026-08-22 (was 5:00am) after
-confirming LinkedIn's Jina Reader calls fail specifically at round cron
-times (shared-IP congestion) but work fine minutes later with identical
-code — an off-minute schedule avoids that congestion window entirely.
+Both were moved off the top of the hour on 2026-08-22 (was 5:00am), on a
+theory that LinkedIn's Jina Reader failures were round-cron-time congestion.
+**That theory was wrong** — confirmed 2026-08-24, LinkedIn still failed 0/7
+at 5:17am (off the round hour) the very next scheduled run. The real cause
+(see Troubleshooting's Jina Reader entry): Jina's shared anonymous-IP pool
+gets domain-wide blocked from linkedin.com whenever ANY of its anonymous
+users' scraping looks abusive to LinkedIn — nothing to do with grant-ops'
+own timing, request pattern, or behavior, and not something an off-minute
+schedule can avoid. The off-hour schedule is harmless and stays (spreading
+load is still reasonable practice), but it isn't the actual LinkedIn fix —
+a `JINA_API_KEY` is (separate per-key quota, not the shared pool).
 
 Both skills' own file headers explain why every step must run in the
 foreground with nothing backgrounded: each is a single headless turn with
@@ -414,16 +421,31 @@ Edit `config/sources.yaml`:
 - **Grants.gov API timeout**: Normal — retry with `npm run scan`
 - **Empty RSS feed**: Check if the RSS URL is still active in `config/sources.yaml`
 - **Playwright fails**: Run `npx playwright install chromium` to reinstall browser
-- **LinkedIn scraping asks for a "paid API" / mentions Jina**: this is Jina
-  Reader (`r.jina.ai`), the anonymous fetcher `src/scrapers/linkedin.js`
-  uses to read public company pages — not something grant-ops itself
-  requires payment for. No key is needed for normal/light use; the message
-  only shows up once you hit Jina's anonymous per-IP rate limit. Fix: get a
-  FREE key (no payment) at https://jina.ai/reader and set `JINA_API_KEY` in
-  `.env` (documented in `.env.example`), or just set `linkedin.enabled:
-  false` in `config/sources.yaml` and skip LinkedIn entirely — every other
-  source still works. (Undocumented until 2026-08-21 — a friend of
-  Ricardo's hit this with no explanation anywhere in the repo.)
+- **LinkedIn fails 0/7, mentions "paid API"/Jina, or logs an
+  `AbuseAlleviationError`**: this is Jina Reader (`r.jina.ai`), the
+  anonymous fetcher `src/scrapers/linkedin.js` uses to read public company
+  pages — not something grant-ops itself requires payment for. As of
+  2026-08-24, `describeJinaError()` surfaces Jina's real error body instead
+  of axios's generic "Request failed with status code 403" — READ that
+  message before guessing at a cause; two prior outages (2026-08-20,
+  2026-08-22) got misdiagnosed as "round-hour cron congestion" purely
+  because the real reason was invisible. The actual, confirmed mechanism:
+  Jina's anonymous access is a SHARED IP pool, and LinkedIn will block that
+  entire pool from anonymous access domain-wide whenever ANY of Jina's
+  anonymous users (anyone, anywhere, unrelated to grant-ops) scrapes
+  linkedin.com in a way that looks abusive — confirmed live 2026-08-24, the
+  block message named a completely unrelated company page
+  ("mount-pleasant-community-policing-centre") as the trigger. This is
+  NOT time-of-day-dependent and an off-hour cron schedule does NOT fix it —
+  it can happen at any time, unpredictably, based on strangers' behavior on
+  a pool grant-ops doesn't control. The only real fix: get a FREE
+  `JINA_API_KEY` at https://jina.ai/reader and set it in `.env` (documented
+  in `.env.example`) — authenticated requests get their own per-key quota,
+  isolated from the shared anonymous pool entirely (confirmed via Jina's own
+  docs: "When you provide an API key... we track rate limits by key rather
+  than IP address"). Until that's set up, `linkedin.enabled: false` in
+  `config/sources.yaml` is the only way to avoid this source going dark
+  unpredictably — every other source still works without it.
 - **A LinkedIn source shows 0 posts every run**: check for a login-wall — the
   guest-view root page occasionally still redirects; `isLoginWall()` in
   `src/scrapers/linkedin.js` should catch it and log a `[LinkedIn] <name>

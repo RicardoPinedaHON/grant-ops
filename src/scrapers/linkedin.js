@@ -125,8 +125,38 @@ async function fetchCompanyPage(companyUrl, { timeout = REQUEST_TIMEOUT_MS } = {
   if (process.env.JINA_API_KEY) {
     headers.Authorization = `Bearer ${process.env.JINA_API_KEY}`;
   }
-  const res = await axios.get(target, { timeout, headers, responseType: 'text' });
-  return res.data;
+  try {
+    const res = await axios.get(target, { timeout, headers, responseType: 'text' });
+    return res.data;
+  } catch (err) {
+    throw new Error(describeJinaError(err));
+  }
+}
+
+// Jina Reader returns a JSON error body describing exactly what went wrong,
+// but axios's default thrown error only exposes a generic "Request failed
+// with status code 403" via err.message and silently discards that body —
+// which is exactly why past LinkedIn failures got misdiagnosed twice
+// (2026-08-20/22, blamed on "round-hour cron congestion") before the real
+// cause was ever visible: confirmed 2026-08-24, Jina's shared anonymous-IP
+// pool gets domain-wide blocked from linkedin.com whenever ANY anonymous
+// user's scraping looks abusive to LinkedIn — "AbuseAlleviationError...
+// blocked until <date>... due to previous abuse found on <unrelated
+// company's URL>: DDoS attack suspected" — nothing to do with grant-ops'
+// own request pattern, timing, or behavior. An authenticated JINA_API_KEY
+// gets its own separate per-key quota instead of sharing this pool (see
+// .env.example) — that's the real fix, not scheduling around a time of day.
+function describeJinaError(err) {
+  const status = err.response?.status;
+  const body = err.response?.data;
+  if (status && typeof body === 'string') {
+    try {
+      const parsed = JSON.parse(body);
+      if (parsed?.message) return `Jina Reader ${status} (${parsed.name || 'error'}): ${parsed.message}`;
+    } catch { /* body wasn't JSON, fall through to the generic case below */ }
+  }
+  if (status) return `Jina Reader returned ${status}: ${err.message}`;
+  return err.message;
 }
 
 /** LinkedIn's guest view redirects unauthenticated requests to a login wall
@@ -757,6 +787,7 @@ module.exports = {
   normalizePost,
   postToGrantRecord,
   fetchCompanyPage,
+  describeJinaError,
   resolveLnkdInUrl,
   resolveExternalLinks,
 };
