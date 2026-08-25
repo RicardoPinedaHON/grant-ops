@@ -4,9 +4,24 @@
 
 const AGGREGATOR_DOMAINS = new Set([
   'reliefweb.int','devex.com','fundsforngos.org','wepropel.org',
-  'easygrant.org','terra-viva-grants.org','mail.beehiiv.com',
+  // 'easygrant.org' and 'leadersoftoday.org' were both WRONG (confirmed
+  // 2026-08-25, live) — the real domains those scrapers actually use are
+  // app.easygrant.io and www.leadersoftoday.com (see portals.js). Because
+  // urlDomain() only strips a literal "www." prefix (not "app."), the
+  // entry has to be the exact subdomain "app.easygrant.io", not just
+  // "easygrant.io". This silently broke the whole point of listing them:
+  // grantsMatch() and grantFingerprint() both treat two grants on the same
+  // NON-aggregator domain as automatically the same grant, so two
+  // completely unrelated EasyGrant-hosted listings ("Hispanic Impact Fund"
+  // / Austin Community Foundation, and "Global Innovation Challenge 2026"
+  // / Social Shifters) were being matched as duplicates purely because
+  // EasyGrant hosts thousands of unrelated grants under one shared domain
+  // with different list IDs in the path — caught live when
+  // filterAlreadyResearchedDuplicates() (deep-research.js) nearly skipped
+  // a genuinely different grant as a false-positive duplicate.
+  'app.easygrant.io','terra-viva-grants.org','mail.beehiiv.com',
   'substack.com','opportunitydesk.org','opportunitytracker.ug',
-  'leadersoftoday.org','undp.org','globalgiving.org','gestionandote.org',
+  'leadersoftoday.com','undp.org','globalgiving.org','gestionandote.org',
   // lnkd.in is LinkedIn's own URL shortener — every post on every LinkedIn
   // page redirects through this ONE domain regardless of funder, so treating
   // it as a "same domain = same grant" signal (the non-aggregator branch in
