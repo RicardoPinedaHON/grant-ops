@@ -86,7 +86,15 @@ async function main() {
   await syncToNotion(scoredGrants, loadResearchCache()).catch(err => console.error('Notion sync error:', err.message));
 }
 
-main().catch(err => {
-  console.error('Scoring failed:', err.message);
-  process.exit(1);
-});
+main()
+  // Explicit exit once the real work (enrich -> score -> reports -> Notion
+  // sync) is done. This is one of the three steps CLAUDE.md's Troubleshooting
+  // section names as reproducing the "finishes real work, process never
+  // exits" hang (not conclusively root-caused — Playwright/Notion's
+  // keep-alive agent are both suspects). Doesn't fix the underlying cause,
+  // but stops the unattended pipeline from silently stalling here.
+  .then(() => process.exit(0))
+  .catch(err => {
+    console.error('Scoring failed:', err.message);
+    process.exit(1);
+  });

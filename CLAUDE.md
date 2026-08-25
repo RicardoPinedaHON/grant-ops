@@ -134,11 +134,17 @@ interactive-session globals" mechanics. `run-scoring.js`/`manual-scorer.js`/
 someone using this tool without a live Claude session) — they're just no
 longer what the automated cycle uses.
 
-**Known residual gap**: `expand-now.js` still scores newly digest-expanded
-grants via `manual-scorer.js` internally, not this real pass. Digest volume
-has been low-to-zero on most runs so far ("nothing to expand" is the common
-case), so this wasn't fixed in the same pass — don't assume digest-expanded
-grants got real judgment until this is addressed too.
+**Fixed 2026-08-25**: `expand-now.js` used to score newly digest-expanded
+grants via `manual-scorer.js` internally — the exact same fake-AI problem,
+just left unfixed in the first pass because digest volume had been
+low-to-zero on most runs ("nothing to expand" is the common case). It now
+follows the identical two-phase pattern as `scan.js` -> `score-with-claude.js`:
+it expands the digests, pre-scores each extracted grant and builds a real
+`claude_prompt` via `buildPromptForClaude()`, writes
+`output/grants_prescored_digest.json`, and waits for genuine per-grant
+judgment before merging into `grants_scored.json` via
+`global.saveExpandedResults()`. See `.claude/skills/grant-full-pipeline/
+SKILL.md`'s step 1d for the exact driver-script contract (mirrors step 1b's).
 
 ## Near-miss validation
 
@@ -469,3 +475,16 @@ Edit `config/sources.yaml`:
   Automation) exists specifically to catch and recover from this 2 hours
   later — check `logs/pipeline_run.log` for its "Validation check:" entries
   if a cycle looks like it produced less than expected.
+  **Mitigated (not root-caused) 2026-08-25**: `run-scoring.js` and
+  `notion-sync.js`'s standalone entry points now call `process.exit(0)`
+  explicitly right after their real work resolves, instead of letting Node
+  wait indefinitely on whatever's actually holding the event loop open.
+  Same fix applied to `global.saveResearchResults` (deep-research.js) and
+  `global.saveNearMissResults` (near-miss-check.js) — both are always
+  invoked from a fresh, one-off `node -e "require(...); global.saveX(...)"`
+  process whose only job is to persist and stop, so exiting explicitly there
+  is safe. This should stop the pipeline from silently stalling on these
+  specific steps going forward; it is a mitigation, not a fix for the
+  underlying cause — if a hang recurs somewhere NOT covered by one of these
+  explicit exits, the real cause is still unknown and `grant-pipeline-
+  validate` remains the real safety net.

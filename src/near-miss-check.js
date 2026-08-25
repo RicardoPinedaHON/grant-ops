@@ -238,7 +238,14 @@ global.saveNearMissResults = async function saveNearMissResults(results) {
     }
   }
   console.log(`\n${upgraded}/${results.length} near-miss grant(s) upgraded past the Monitor floor.`);
-  return { upgraded, total: results.length };
+
+  // Same fresh-one-off-process pattern as deep-research.js's
+  // saveResearchResults (this is always invoked via `node -e "require(...);
+  // global.saveNearMissResults([...])"`, never from a test or a long-lived
+  // process) — and the same documented "finishes real work, never exits"
+  // hang applies here too. Exiting explicitly is a mitigation, not a fix for
+  // the underlying cause (see CLAUDE.md Troubleshooting).
+  process.exit(0);
 };
 
 // Only run the actual pipeline stage when invoked directly (`node src/near-

@@ -25,11 +25,11 @@ without a live Claude session, etc.) — just don't use them for THIS
 automated run anymore. See CLAUDE.md's "Automated Claude scoring" section
 for the full incident writeup.
 
-Known residual gap: `expand-now.js` (step 1d below) still scores newly
-digest-expanded grants internally via `manual-scorer.js`, not this real
-pass — digest volume has been low/zero on most runs so far, but don't
-assume digest-expanded grants got the same quality of judgment as the main
-batch until that's also fixed.
+Fixed 2026-08-25: `expand-now.js` (step 1d below) used to score newly
+digest-expanded grants internally via `manual-scorer.js`, not real judgment
+— digest volume had been low/zero on most runs, which is why it slipped
+through the first fix. It now builds real `claude_prompt`s the same way
+step 1b does, and needs the same kind of driver-script step to persist.
 
 **Ricardo's standing instruction (2026-08-07): when this runs on schedule, do
 NOT ask for approval or pause for confirmation at any step. Proceed straight
@@ -97,9 +97,28 @@ later turn. If a step is slow, that's fine — just wait for it.
    Notion.
 
    **1d.** Run `node src/expand-now.js`. Opens any ImpactFunding digest
-   items found in `grants_scored.json` and extracts individual grants —
-   these get scored via `manual-scorer.js` internally (the known residual
-   gap noted above), then synced to Notion by this script itself.
+   items found in `grants_scored.json`, extracts individual grants, and (if
+   any survive the pre-filter) writes `output/grants_prescored_digest.json`
+   with a real `claude_prompt` per item — same contract as step 1b, just a
+   separate small batch. If it prints "nothing to expand" or "nothing
+   passed the pre-filter", there's nothing more to do here — move on to
+   step 2.
+      For every item with a `claude_prompt`, read it and produce genuine
+      judgment the same way you did in 1b (same JSON shape, same
+      `_ineligible` convention). Then persist with a temp driver script the
+      same way as 1b:
+      `const { scoreOneGrant, mergeAndSave } = require('./src/expand-now.js')`,
+      load `grants_prescored_digest.json` + the just-updated
+      `grants_scored.json` + `org-profile.yaml` yourself, filter
+      `grants_scored.json` down to non-`ImpactFunding Substack` entries
+      (`nonDigestScored`), map your responses through
+      `scoreOneGrant(item, response)`, and call
+      `mergeAndSave(nonDigestScored, scoredGrants, profile)` — or, if you're
+      running this interactively in the same process expand-now.js already
+      ran in, just call `global.saveExpandedResults(scoredGrants)` directly
+      (it does the same merge, then exits). This step's results get pushed
+      to Notion by step 1c already having run before it, plus the final
+      sync in step 7 — expand-now.js itself doesn't call notion-sync.js.
 
 2. Run `node src/near-miss-check.js`. Added 2026-08-18 after an audit found
    real candidates (Halton "Indoor Environmental Quality Grants", GEF SGP CSO

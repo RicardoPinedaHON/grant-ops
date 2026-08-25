@@ -13,6 +13,7 @@ const fs    = require('fs');
 const path  = require('path');
 const { grantFingerprint } = require('./utils/grant-fingerprint');
 const { isResearchStale } = require('./notion-client');
+const { INELIGIBLE_FLAGS } = require('./scorer/index');
 
 function loadEnv() {
   const envPath = path.join(__dirname, '..', '.env');
@@ -146,12 +147,9 @@ function identityKeyFor(grant) {
 
 // ── Tier helpers ──────────────────────────────────────────────────────────────
 // Use scoring.recommendation directly (stays in sync with scorer/index.js thresholds)
-
-const INELIGIBLE_FLAGS = [
-  'WRONG_GEOGRAPHY', 'SCHOLARSHIP_ONLY', 'COURSE_NOT_GRANT',
-  'VC_ONLY', 'NEWS_ARTICLE', 'CONFERENCE_NOT_GRANT',
-  'NO_SPECIFIC_OPPORTUNITY', 'INELIGIBLE_GEO',
-];
+// INELIGIBLE_FLAGS itself is imported from scorer/index.js (above) — it used to be
+// duplicated verbatim here, which meant updating one copy without the other would
+// silently desync which flags force an Ineligible tier (found 2026-08-25 gap review).
 
 // Deep research (src/deep-research.js) is more authoritative than the
 // surface-level rule+Claude score — it actually checked the funder's live
@@ -549,8 +547,16 @@ if (require.main === module) {
   }
   const scored = JSON.parse(fs.readFileSync(SCORED, 'utf8'));
   const { loadResearchCache } = require('./tracker/index');
-  syncToNotion(scored, loadResearchCache()).catch(err => {
-    console.error('Sync failed:', err.message);
-    process.exit(1);
-  });
+  syncToNotion(scored, loadResearchCache())
+    // Explicit exit once the real work is done — `agent: false` above stops
+    // Node's keep-alive HTTPS agent from holding the process open, but this
+    // hang has reproduced multiple times anyway (2026-08-18, 2026-08-22) and
+    // was never conclusively root-caused (see CLAUDE.md Troubleshooting).
+    // Forcing exit here doesn't fix the underlying cause, but it does mean
+    // the unattended pipeline stops silently stalling on this exact step.
+    .then(() => process.exit(0))
+    .catch(err => {
+      console.error('Sync failed:', err.message);
+      process.exit(1);
+    });
 }

@@ -169,4 +169,10 @@ module.exports = {
   RECOMMEND_THRESHOLD,
   CONSIDER_THRESHOLD,
   MONITOR_THRESHOLD,
+  // Exported so notion-sync.js (and anything else that needs to know what
+  // counts as a hard ineligibility flag) can import this instead of keeping
+  // its own copy — the two lists drifting apart silently was a real risk
+  // (found 2026-08-25 during a gap review): nothing enforced they stayed in
+  // sync, and this is the single source of truth combineScores() itself uses.
+  INELIGIBLE_FLAGS,
 };

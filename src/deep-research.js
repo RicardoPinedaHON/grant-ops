@@ -256,7 +256,15 @@ global.saveResearchResults = async function saveResearchResults(results) {
     console.log(`  ${entry.likelihood_percent}% ${entry.recommendation} — ${grant.title.slice(0, 60)}${flag}`);
   });
 
-  return { researchFile: path.join(OUTPUT_DIR, 'grants_research.json'), reportPath };
+  // This is always called from a fresh, one-off `node -e "require(...);
+  // global.saveResearchResults([...])"` process (see the skill docs) whose
+  // entire purpose is to persist these results and stop — never from a test
+  // or a long-lived interactive process. That call has repeatedly hung after
+  // finishing this real work (CLAUDE.md Troubleshooting names this exact
+  // step; never conclusively root-caused). Exiting explicitly here doesn't
+  // fix the underlying cause, but stops the unattended pipeline from
+  // silently stalling on it.
+  process.exit(0);
 };
 
 // ─── Build candidates (local scan + Notion backlog) and expose the target
