@@ -18,7 +18,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { isResearchStale, agingBonus, parseAmount, richText } = require('../src/notion-client');
+const { isResearchStale, agingBonus, parseAmount, richText, computeDeadlineFields, formatDeadlineNote } = require('../src/notion-client');
 
 test('isResearchStale: fresh research (even with a big score drift) is not stale', () => {
   const entry = { researched_at: new Date().toISOString(), scored_at_score: 2.5 };
@@ -48,7 +48,14 @@ test('isResearchStale: missing researched_at or scored_at_score is treated as no
 
 test('agingBonus: no scan date (or today) contributes nothing — same-day candidates get no boost', () => {
   assert.equal(agingBonus(null), 0);
-  assert.equal(agingBonus(new Date().toISOString()), 0);
+  // Pre-existing flakiness found in passing (2026-09-12, unrelated to this
+  // session's actual changes): agingBonus() reads Date.now() itself, a few
+  // microseconds after this test captured `new Date().toISOString()` —
+  // real (if tiny) elapsed time can produce a near-zero-but-nonzero bonus,
+  // failing a strict `=== 0` assertion intermittently. A tolerance is
+  // correct here, not a mock — the function isn't wrong to return a sliver
+  // of bonus for genuinely elapsed time.
+  assert.ok(agingBonus(new Date().toISOString()) < 1e-6);
 });
 
 test('agingBonus: grows with time waiting and is capped', () => {
@@ -83,4 +90,37 @@ test('richText: joins Notion rich_text runs, and returns null for empty', () => 
   assert.equal(richText({ rich_text: [{ plain_text: 'Hello ' }, { plain_text: 'world' }] }), 'Hello world');
   assert.equal(richText({ rich_text: [] }), null);
   assert.equal(richText(undefined), null);
+});
+
+// Regression coverage for the 2026-09-12 fix: deep-research used to only
+// ever write a Deadline when a CURRENT confirmed date was found — an
+// estimated-next-cycle or last-known-historical guess (both required from
+// every research pass now, see prompts.js) never made it past prose in the
+// report, leaving "Rolling" for grants that actually have fixed dates.
+test('computeDeadlineFields: a confirmed date sets Deadline with no extra marker', () => {
+  const { deadlineObj, deadlineNote } = computeDeadlineFields('2026-09-15', 'confirmed');
+  assert.deepEqual(deadlineObj, { start: '2026-09-15' });
+  assert.doesNotMatch(deadlineNote, /estimado|última fecha conocida/);
+});
+
+test('computeDeadlineFields: an estimated_annual guess still sets a real Deadline, marked as an estimate', () => {
+  const { deadlineObj, deadlineNote } = computeDeadlineFields('2027-01-15', 'estimated_annual');
+  assert.deepEqual(deadlineObj, { start: '2027-01-15' });
+  assert.match(deadlineNote, /^≈/);
+  assert.match(deadlineNote, /estimado/);
+});
+
+test('computeDeadlineFields: a historical (last-known) deadline sets Deadline, not "rolling"', () => {
+  const { deadlineObj, deadlineNote, isRealDate, isRolling } = computeDeadlineFields('2026-03-01', 'historical');
+  assert.deepEqual(deadlineObj, { start: '2026-03-01' });
+  assert.equal(isRealDate, true);
+  assert.equal(isRolling, false);
+  assert.match(deadlineNote, /última fecha conocida/);
+});
+
+test('computeDeadlineFields: "rolling" produces no Deadline date, only the Rolling note', () => {
+  const { deadlineObj, deadlineNote, isRolling } = computeDeadlineFields('rolling', 'rolling');
+  assert.equal(deadlineObj, null);
+  assert.equal(isRolling, true);
+  assert.equal(deadlineNote, formatDeadlineNote('rolling'));
 });

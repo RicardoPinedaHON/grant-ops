@@ -61,6 +61,29 @@ ${grantSummary}
    cycle, no funder statement, no pattern — should you call it truly
    unknown, and even then default to assuming it will NOT reopen within 12
    months (the cautious assumption, not the optimistic one).
+
+   **A concrete date is REQUIRED — "rolling" is the rare exception, not the
+   default** (Ricardo, 2026-09-12: found live that the vast majority of
+   already-researched grants had a solid prose estimate in this exact
+   section, "~Q1 2027" or similar, that never made it into the actual
+   Deadline field — everything just sat on "Rolling" regardless). Apply
+   this priority order, and produce a real \`best_deadline_date\` for the
+   JSON below no matter which branch you land in:
+   a. OPEN with a stated deadline -> that exact date. confidence: "confirmed".
+   b. CLOSED, and you found evidence of a recurring cycle (funder states
+      "opens annually every [month]", or 2+ past rounds cluster around the
+      same month/day) -> estimate the NEXT occurrence (same month/day,
+      next plausible year). confidence: "estimated_annual".
+   c. CLOSED, no annual pattern evidence, but you found the LAST actual
+      past round's deadline -> use THAT past date as-is (do not advance
+      it to a future year you can't justify). confidence: "historical".
+      This is deliberately not "rolling" — a known past fixed date is real
+      information a blank/rolling field throws away.
+   d. Only when the funder's OWN language explicitly states no fixed
+      cycle ("aceptamos propuestas todo el año", "rolling basis", "accepted
+      year-round") -> "rolling". confidence: "rolling". This should be
+      genuinely rare: most grants have fixed dates, even if you have to
+      dig for last year's to find one.
 3. Find 5-10 past grantees, winners, or finalists of this specific program
    (not the funder's other programs). For each, note: organization type,
    country/region, project focus, approximate stage/size, amount if found,
@@ -134,6 +157,8 @@ the detail belongs):
   "status_evidence": "<one sentence, or null if status could not be confirmed>",
   "reopens_within_12mo": <true|false>,
   "reopening_estimate": "<one sentence educated guess + reasoning, or null only if currently open>",
+  "best_deadline_date": "<REQUIRED, per the priority order above: a real YYYY-MM-DD (confirmed current, estimated-next-cycle, or last-known-historical), or the literal word rolling only in the rare case the funder explicitly states no fixed cycle. Never null.>",
+  "deadline_confidence": "<confirmed|estimated_annual|historical|rolling — matches whichever branch produced best_deadline_date above>",
   "confidence": "<high|medium|low>",
   "sources": ["<url>", "..."]
 }
@@ -141,11 +166,12 @@ the detail belongs):
 
 ## How to map likelihood % to recommendation (use this exactly)
 
-Step 1 — start from likelihood %:
-- 70-100%  -> APPLY_NOW
-- 50-69%   -> CONSIDER
-- 30-49%   -> MONITOR
-- 10-29%   -> MONITOR (unless the funder is not strategically worth tracking, then SKIP)
+Step 1 — start from likelihood % (Ricardo, 2026-09-11 — lowered thresholds so
+genuinely-open, plausible-fit opportunities surface as CONSIDER/APPLY_NOW
+instead of getting buried at MONITOR):
+- 40-100%  -> APPLY_NOW
+- 20-39%   -> CONSIDER
+- 10-19%   -> MONITOR (unless the funder is not strategically worth tracking, then SKIP)
 - 0-9%     -> SKIP
 - Hard structural disqualifier found (wrong legal status, wrong country, etc.) -> INELIGIBLE regardless of %
 

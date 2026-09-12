@@ -73,6 +73,28 @@ Make it specific: name the project and the framing angle, not a generic "we can 
 In 2-3 sentences: what specifically helps AND what specifically hurts this application.
 Name the concrete gap if there is one, referencing the Known Gaps & Hard Limits above where applicable.
 
+**7. Clean title & deadline correction** (Ricardo, 2026-09-11 — the scraper's
+own title/deadline extraction is regex/selector-based and frequently wrong:
+LinkedIn posts get titled by their opening sentence/hashtag hook instead of
+the actual program name, newsletter roundup links get titled with just the
+funder's name, and a wrong CSS selector can grab a status badge like "Call
+closed" as if it were the title. Deadlines default to "rolling" constantly
+because date-format regex can't cover how hundreds of different funders
+phrase dates — but you're already reading the same description text below,
+so use it to correct both, for free, in the same pass):
+- clean_title: the ACTUAL grant/program name as best you can tell from the
+  Title/Description above — not a hook sentence, not a hashtag, not a bare
+  status word ("Call closed", "Open now"), not just the funder's name alone
+  unless that genuinely IS the program's name. If the given Title already
+  looks like a real program name, just return it unchanged — don't invent a
+  "cleaner" version of something that wasn't broken.
+- corrected_deadline: if the Description text states a concrete date or
+  explicitly confirms no fixed deadline ("rolling basis", "accepted year-
+  round") that the Deadline field above does NOT already reflect, return it
+  as "YYYY-MM-DD" or the literal string "rolling". If the Description gives
+  you no more date information than the Deadline field already shows,
+  return null — do not guess a date that isn't actually stated.
+
 Respond in this exact JSON format (no other text):
 {
   "mission_alignment": <number 0.0-1.2>,
@@ -81,7 +103,9 @@ Respond in this exact JSON format (no other text):
   "best_projects": ["project name 1"],
   "application_angle": "<one sentence or null>",
   "confidence": "<high|medium|low>",
-  "reasoning": "<2-3 sentences: what helps AND what hurts, naming concrete gaps>"
+  "reasoning": "<2-3 sentences: what helps AND what hurts, naming concrete gaps>",
+  "clean_title": "<the real grant/program name>",
+  "corrected_deadline": "<YYYY-MM-DD, or the word rolling, or null>"
 }`;
 }
 

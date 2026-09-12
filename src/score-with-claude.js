@@ -46,10 +46,41 @@ function saveScoredGrants(scoredGrants, profile) {
   return { scoredFile, tsvPath, reportPath, htmlPath, distribution: buildDistribution(scoredGrants) };
 }
 
+// Ricardo, 2026-09-11 — the scraper's own title/deadline extraction is
+// regex/selector-based and confirmed live to be wrong often: LinkedIn's
+// deriveTitle() grabs a post's opening hook sentence, digest-expander.js
+// grabs a roundup link's text (usually just the funder's name), and a stale
+// CSS selector on one aggregator source grabbed a status badge ("Call
+// closed") as the title. Rather than adding yet another regex per source
+// (the same losing game as enricher.js's DEADLINE_PATS, which floods
+// "rolling" defaults whenever a funder phrases their date in a way none of
+// the patterns cover — confirmed live: RSS/newsletter sources resolve a
+// real deadline only 6-26% of the time, vs 78-95% for structured portal
+// sources), Claude is already reading the full description to score the
+// grant — asking it to also report the real title/deadline from that same
+// text is free. See prompts.js's "Clean title & deadline correction"
+// section for the exact contract Claude responds to.
+function applyExtractionCorrections(grant, claudeResponse) {
+  const updated = { ...grant };
+
+  const cleanTitle = (claudeResponse.clean_title || '').trim();
+  // Never let a short/empty response blank out a real title — only apply
+  // when Claude actually returned something substantive.
+  if (cleanTitle.length > 3) updated.title = cleanTitle;
+
+  const correctedDeadline = claudeResponse.corrected_deadline;
+  if (correctedDeadline === 'rolling' || /^\d{4}-\d{2}-\d{2}$/.test(correctedDeadline || '')) {
+    updated.deadline = correctedDeadline;
+  }
+
+  return updated;
+}
+
 function scoreOneGrant(prescoredItem, claudeResponse) {
   if (!prescoredItem) throw new Error('No prescored item given');
   const scoring = combineScores(prescoredItem.prescore, claudeResponse);
-  return { grant: prescoredItem.grant, scoring };
+  const grant = applyExtractionCorrections(prescoredItem.grant, claudeResponse);
+  return { grant, scoring };
 }
 
 // ─── Orchestration (only runs when invoked directly, not on require()) ─────
@@ -128,4 +159,4 @@ if (require.main === module) {
   };
 }
 
-module.exports = { saveScoredGrants, scoreOneGrant, buildDistribution };
+module.exports = { saveScoredGrants, scoreOneGrant, buildDistribution, applyExtractionCorrections };

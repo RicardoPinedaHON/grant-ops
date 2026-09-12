@@ -125,8 +125,57 @@ function agingBonus(scanDate) {
   return Math.min(AGING_BONUS_CAP, (days / 7) * AGING_BONUS_PER_WEEK);
 }
 
+// Renders a grant's deadline as the emoji-coded "days left" text shown in
+// Notion's Deadline Note column. Pulled out of notion-sync.js (2026-09-11)
+// so deep-research.js can call the exact same formatter when it PATCHes a
+// discovered_deadline into an existing backlog page — a second copy of this
+// would drift out of sync with the real one, same INELIGIBLE_FLAGS lesson
+// from 2026-08-25 (see CLAUDE.md). Takes the raw deadline string (grant.deadline
+// or a research-discovered "YYYY-MM-DD"), not a full grant object.
+function formatDeadlineNote(deadline) {
+  const d = deadline;
+  if (!d || d === 'rolling') return '🔄 Rolling — open call';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const dt   = new Date(d + 'T12:00:00Z');
+    const days = Math.round((dt - Date.now()) / 86400000);
+    const fmt  = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    if (days < 0)   return `⛔ Closed (${fmt})`;
+    if (days <= 14) return `🔴 ${fmt} (${days}d left!)`;
+    if (days <= 45) return `🟡 ${fmt} (${days}d)`;
+    return `🟢 ${fmt} (${days}d)`;
+  }
+  return `📅 ${d}`;
+}
+
+// Turns a deep-research result's best_deadline_date + deadline_confidence
+// (see prompts.js — REQUIRED from every research pass since 2026-09-12,
+// "rolling" only for a genuinely evidenced no-fixed-cycle funder) into the
+// Notion Deadline date property + Deadline Note text, marking anything
+// short of a confirmed current date so a guess never looks identical to a
+// verified one. Shared by deep-research.js (Notion-backlog grants) and
+// notion-sync.js (same-day grants) — one implementation, not two that can
+// drift apart (same INELIGIBLE_FLAGS lesson, 2026-08-25).
+function computeDeadlineFields(bestDeadlineDate, deadlineConfidence) {
+  const isRealDate = /^\d{4}-\d{2}-\d{2}$/.test(bestDeadlineDate || '');
+  const isRolling = bestDeadlineDate === 'rolling';
+
+  const deadlineObj = isRealDate ? { start: bestDeadlineDate } : null;
+
+  let deadlineNote = null;
+  if (isRealDate) {
+    deadlineNote = formatDeadlineNote(bestDeadlineDate);
+    if (deadlineConfidence === 'estimated_annual') deadlineNote = '≈ ' + deadlineNote + ' (estimado)';
+    else if (deadlineConfidence === 'historical') deadlineNote += ' (última fecha conocida — próxima ronda sin confirmar)';
+  } else if (isRolling) {
+    deadlineNote = formatDeadlineNote('rolling');
+  }
+
+  return { deadlineObj, deadlineNote, isRealDate, isRolling };
+}
+
 module.exports = {
   notionRequest, richText, parseAmount, notionPageToGrant,
   isResearchStale, STALE_RESEARCH_DAYS, STALE_SCORE_DRIFT,
   agingBonus, AGING_BONUS_PER_WEEK, AGING_BONUS_CAP,
+  formatDeadlineNote, computeDeadlineFields,
 };

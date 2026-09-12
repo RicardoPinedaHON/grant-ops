@@ -236,7 +236,10 @@ function parseLinksAndPlainText(chunk) {
 
     if (!isLinkedInHost && url && !seenExternal.has(url)) {
       seenExternal.add(url);
-      externalUrls.push({ original_url: url, resolved_url: null });
+      // `label` kept (Ricardo, 2026-09-11) so a post bundling several
+      // opportunities ("Descubre 4 fondos...") can derive a per-link title
+      // from each link's own anchor text — see splitMultiOpportunityPost().
+      externalUrls.push({ original_url: url, resolved_url: null, label: (label || '').trim() });
     }
 
     return label || '';
@@ -256,6 +259,14 @@ const BOILERPLATE_PATTERNS = [
   /\b(?:like|comment|share)\b(?=\s|$)/gi,
   /[\d,]+\s+followers?/gi,
   /…\s*more|\.\.\.\s*more/gi,
+  // LinkedIn's own "Edited" badge on a post that was changed after
+  // publishing (Ricardo, 2026-09-12, confirmed live: "Edited ¡La espera
+  // terminó!" became both a nonsense title AND a duplicate Notion page of
+  // an already-reviewed post, purely because this literal UI label was
+  // being read as part of the post's actual content — different raw text
+  // in, different fingerprint out, for what's the exact same underlying
+  // post before/after LinkedIn marked it edited).
+  /^\s*edited\s+/i,
 ];
 
 // Removed as a whole markdown list item (bullet + link), BEFORE the generic
@@ -365,17 +376,35 @@ function extractMentionedOrganizations(text) {
 // login. Non-fatal: any failure just leaves resolved_url as null.
 // ─────────────────────────────────────────────────────────────────────────
 
+// Confirmed live (Ricardo, 2026-09-11): this NEVER actually worked.
+// lnkd.in doesn't do an HTTP redirect at all — it serves a 200 OK
+// "You're leaving LinkedIn" interstitial page whose real destination is
+// only rendered client-side via JS. axios has no JS engine, so
+// `res.request.res.responseUrl` was always just the lnkd.in URL itself
+// (no redirect ever happened at the HTTP level) — meaning every single
+// LinkedIn grant's `url` has been the unusable lnkd.in short link this
+// whole time, not the funder's real page. That silently broke enrichment
+// too: enricher.js's Playwright fetch was reading the SAME interstitial
+// page's text, not the funder's, which is a real chunk of why LinkedIn's
+// deadline-capture rate measured only 39% versus 78-95% for sources with
+// working detail-page URLs. Needs an actual browser to read the rendered
+// destination link — same pattern already used by enricher.js/
+// digest-expander.js for this exact reason.
 async function resolveLnkdInUrl(url, { timeout = 15000 } = {}) {
+  const { getPage, safeGoto } = require('./playwright-base');
+  const page = await getPage();
   try {
-    const res = await axios.get(url, {
-      timeout,
-      maxRedirects: 10,
-      headers: { 'User-Agent': 'grant-ops/1.0 (NGO grant monitoring tool)' },
-      validateStatus: () => true,
+    const ok = await safeGoto(page, url, timeout);
+    if (!ok) return null;
+    await page.waitForTimeout(1200);
+    return await page.evaluate(() => {
+      const a = document.querySelector('a[href^="http"]:not([href*="linkedin.com"]):not([href*="licdn.com"])');
+      return a ? a.href : null;
     });
-    return res.request?.res?.responseUrl || res.request?.responseURL || null;
   } catch (_) {
     return null;
+  } finally {
+    try { await page.close(); } catch {}
   }
 }
 
@@ -432,13 +461,26 @@ function normalizePost(rawPost, sourceCfg, detectedAtIso) {
 // geo/size/deadline scoring) exactly like every other source.
 // ─────────────────────────────────────────────────────────────────────────
 
-const POSITIVE_KEYWORDS = [
-  'grant', 'grant program', 'funding', 'fund', 'call for proposals',
-  'call for applications', 'convocatoria', 'financiamiento', 'subvencion',
-  'subvenciones', 'fondo', 'fondos', 'cooperacion', 'fellowship',
+// Split into STRONG (specific enough alone — false-positive rate is low)
+// vs WEAK (generic development-sector vocabulary that shows up in ANY
+// LATAM civil-society LinkedIn post — opinion pieces, thought-leadership,
+// event recaps — regardless of whether a real fundable opportunity
+// exists). Confirmed live (Ricardo, 2026-09-12): "2030 no es el final de
+// los ODS." and "El verdadero reto de la IA para las OSC no es aprender a
+// usar ChatGPT." — pure opinion posts, no opportunity at all — both got
+// scored as candidate grants purely because they mentioned generic words
+// like "financiamiento"/"cooperación" in passing. A WEAK keyword only
+// counts when paired with an actual action/opportunity cue (deadline,
+// "aplica", "convocatoria abierta", etc.) — on its own it proves nothing.
+const STRONG_KEYWORDS = [
+  'grant', 'grant program', 'call for proposals', 'call for applications',
+  'convocatoria', 'subvencion', 'subvenciones', 'fellowship',
   'challenge fund', 'request for proposals', 'rfp', 'eoi',
-  'expression of interest',
+  'expression of interest', 'fund',
 ];
+const WEAK_KEYWORDS = ['funding', 'financiamiento', 'fondo', 'fondos', 'cooperacion'];
+const ACTION_CUE_PATTERN =
+  /\b(aplica|postula|apply\s*now|deadline|plazo|fecha\s*l[ií]mite|convocatoria\s*abierta|hasta\s*el|cierra\s*el|closes?\s*on|due\s*date|solicita|inscrib)/i;
 
 function escapeRegExp(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -449,7 +491,10 @@ function escapeRegExp(str) {
 // false-positives inside common Spanish words such as "difundir"/"difunde"
 // ("to broadcast"), which appear constantly in this domain and are
 // otherwise unrelated to funding.
-const POSITIVE_KEYWORD_PATTERNS = POSITIVE_KEYWORDS.map(
+const STRONG_KEYWORD_PATTERNS = STRONG_KEYWORDS.map(
+  kw => new RegExp(`\\b${escapeRegExp(kw)}s?\\b`, 'i')
+);
+const WEAK_KEYWORD_PATTERNS = WEAK_KEYWORDS.map(
   kw => new RegExp(`\\b${escapeRegExp(kw)}s?\\b`, 'i')
 );
 
@@ -473,8 +518,9 @@ function stripHashtags(text) {
 
 function isLikelyOpportunityPost(text) {
   const norm = normalizeForMatch(stripHashtags(text));
-  const hasPositiveSignal = POSITIVE_KEYWORD_PATTERNS.some(re => re.test(norm));
-  if (!hasPositiveSignal) return false;
+  const hasStrongSignal = STRONG_KEYWORD_PATTERNS.some(re => re.test(norm));
+  const hasWeakSignal = WEAK_KEYWORD_PATTERNS.some(re => re.test(norm)) && ACTION_CUE_PATTERN.test(norm);
+  if (!hasStrongSignal && !hasWeakSignal) return false;
   if (SELF_PROMO_AD_PATTERN.test(norm)) return false;
   return true;
 }
@@ -609,11 +655,25 @@ const GEOGRAPHY_MARKERS = [
 // by every other source (see scrapers/rss.js). No parallel model.
 // ─────────────────────────────────────────────────────────────────────────
 
+// See deriveTitle() below for why this exists.
+const PROGRAM_NAME_PAT =
+  /[A-Z][\wÀ-ÿ'.,-]*(?:\s+[A-Z0-9][\wÀ-ÿ'.,-]*){0,6}\s+(?:Award|Awards|Grant|Grants|Fund|Fondo|Fondos|Programa|Programme|Program|Beca|Becas|Fellowship|Prize|Premio|Challenge|Convocatoria|Subvenci[oó]n|Iniciativa)\b(?:\s+\d{4}(?:[-–]\d{2,4})?)?/;
+
 function deriveTitle(text) {
   // Prefer text up to the first "|" (common LinkedIn convocatoria pattern:
   // "Convocatoria abierta ... | Reece Foundation – Grant Program"), else up
   // to the first sentence-ish boundary, capped at 140 chars.
-  const stripped = text.replace(/^[\p{Emoji_Presentation}\u2600-\u27BF\s]+/u, '').trim();
+  const stripped = text.replace(/^[\p{Emoji_Presentation}\u2600-\u27BF\u00A1\u00BF!?\s]+/u, '').trim();
+
+  // Try to find an actual "<Name> Award/Grant/Fund/..." pattern anywhere in
+  // the post \u2014 beats the hook sentence whenever one exists, since it's an
+  // actual program name rather than marketing copy (Ricardo, 2026-09-11,
+  // confirmed live: "Whitley Award 2027 \u2013 Whitley Fund for Nature",
+  // "Canvas Home Small Grants 2026" etc. were all getting buried behind a
+  // rhetorical hook sentence by the old first-sentence-only heuristic).
+  const nameMatch = stripped.match(PROGRAM_NAME_PAT);
+  if (nameMatch && nameMatch[0].length > 8) return nameMatch[0].trim();
+
   const pipeIdx = stripped.indexOf('|');
   if (pipeIdx > 10 && pipeIdx < 160) return stripped.slice(0, pipeIdx).trim();
   const sentenceMatch = stripped.match(/^.{20,140}?[.!?](?:\s|$)/);
@@ -673,6 +733,64 @@ function postToGrantRecord(post) {
     // ── full normalized post, preserved for traceability/debugging ──
     _linkedin: post,
   };
+}
+
+// Detects a post that bundles SEVERAL distinct funding opportunities into
+// one LinkedIn post (e.g. "Descubre 4 fondos para responder a emergencias
+// y fortalecer la resiliencia..."). Confirmed live (Ricardo, 2026-09-11,
+// backfilling bad Notion titles): postToGrantRecord() took only the FIRST
+// external link (`external_urls.find(...)`) and one generic collective
+// title for the whole post, silently discarding the other N-1
+// opportunities' links entirely — the exact same "roundup post, one URL,
+// many grants" shape digest-expander.js already exists to handle for
+// Substack/email, LinkedIn just never got the equivalent.
+const MULTI_OPPORTUNITY_PAT = /\b\d+\s+(?:oportunidades|fondos|convocatorias|opportunities|grants|funds)\b/i;
+
+function isMultiOpportunityPost(post) {
+  if (!MULTI_OPPORTUNITY_PAT.test(post.post_text || '')) return false;
+  const distinctLinks = new Set(
+    (post.external_urls || [])
+      .filter(u => !/^mailto:/i.test(u.original_url))
+      .map(u => u.resolved_url || u.original_url)
+  );
+  return distinctLinks.size > 1;
+}
+
+// Splits a multi-opportunity post into one grant record per distinct
+// external link, instead of the old single merged record that only ever
+// kept the first. Amount/deadline still come from the SHARED post text
+// (there's no way to attribute "$50,000" to link #2 specifically from one
+// combined announcement) — enricher.js re-fetches each record's own
+// distinct `url` afterward and can find THAT opportunity's real
+// deadline/amount, same as it already does for digest-expander.js output.
+function splitMultiOpportunityPost(post) {
+  const base = postToGrantRecord(post);
+  const seen = new Set();
+  const links = (post.external_urls || []).filter(u => {
+    if (/^mailto:/i.test(u.original_url)) return false;
+    const key = u.resolved_url || u.original_url;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return links.map((link, i) => {
+    const url = link.resolved_url || link.original_url;
+    const labelTitle = (link.label || '').trim();
+    // Prefer the link's own anchor text as the title when it's substantive
+    // (LinkedIn posts often link each opportunity's name directly) — falls
+    // back to the post's overall title + an index, rather than inventing a
+    // name that isn't actually there.
+    const title = labelTitle.length > 8 ? labelTitle : `${base.title} (opción ${i + 1}/${links.length})`;
+    return {
+      ...base,
+      id: `${base.id}_${i}`,
+      title,
+      opportunity_name: title,
+      url,
+      _from_linkedin_multi: post.fingerprint,
+    };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -745,7 +863,11 @@ async function fetchLinkedInSources(linkedinConfig, history) {
           // Only resolve lnkd.in redirects for posts we actually keep —
           // keeps request volume low, per the "no agressive scraping" rule.
           post.external_urls = await resolveExternalLinks(post.external_urls);
-          grants.push(postToGrantRecord(post));
+          if (isMultiOpportunityPost(post)) {
+            grants.push(...splitMultiOpportunityPost(post));
+          } else {
+            grants.push(postToGrantRecord(post));
+          }
         }
       }
 
@@ -771,6 +893,10 @@ async function fetchLinkedInSources(linkedinConfig, history) {
 module.exports = {
   fetchLinkedInSources,
   // exported for tests
+  deriveTitle,
+  isMultiOpportunityPost,
+  splitMultiOpportunityPost,
+  resolveLnkdInUrl,
   normalizeText,
   normalizeForMatch,
   fingerprintPost,

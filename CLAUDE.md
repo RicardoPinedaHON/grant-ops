@@ -80,7 +80,7 @@ After running scan.js, load `output/grants_prescored.json`. For each item:
      "application_angle": "one sentence or null",
      "confidence": "high|medium|low",
      "reasoning": "2-3 sentences: what specifically helps AND hurts",
-     "_ineligible": true  // OPTIONAL — set this if the item isn't really an
+     "_ineligible": true,  // OPTIONAL — set this if the item isn't really an
                            // org-level grant at all (individual fellowship,
                            // internship, webinar/workshop, paid course ad,
                            // consultancy contract, vendor marketing post, an
@@ -88,8 +88,34 @@ After running scan.js, load `output/grants_prescored.json`. For each item:
                            // slip past the pre-filter constantly from RSS/
                            // LinkedIn/email sources and forcing INELIGIBLE
                            // here is more honest than a low-but-nonzero score
+     "clean_title": "the real grant/program name",   // see below
+     "corrected_deadline": "YYYY-MM-DD | rolling | null"  // see below
    }
    ```
+   **`clean_title` / `corrected_deadline`** (Ricardo, 2026-09-11): the
+   scraper's own title/deadline extraction is regex/selector-based and
+   confirmed live to be wrong often — LinkedIn's `deriveTitle()` grabs a
+   post's opening hook sentence, `digest-expander.js` grabs a newsletter
+   roundup link's text (usually just the funder's name, not the program),
+   and one aggregator source's CSS selector grabbed a status badge ("Call
+   closed") as the title. Deadlines default to "rolling" very often for the
+   same reason — `enricher.js`'s regex patterns can't cover how hundreds of
+   different funders phrase dates (confirmed: 78-95% real-deadline hit rate
+   for structured portal sources vs 6-26% for RSS/newsletter/email sources).
+   You're already reading the grant's full description to score it — use
+   that same read to report the ACTUAL program name and, if the description
+   states a date the scraper missed, the real deadline. Return the original
+   title unchanged if it already looks right; return `corrected_deadline:
+   null` if the description gives no more date info than what's already
+   there (never guess). `applyExtractionCorrections()` in
+   `score-with-claude.js` applies these onto the grant object BEFORE it
+   flows into `grants_scored.json` / Notion sync, so a correction here fixes
+   the title/deadline everywhere downstream in one place — no changes
+   needed to `notion-sync.js`, the reports, or dedup. Known limitation: this
+   only applies going forward to newly-scored grants; it does not
+   retroactively fix the ~375 grants already in Notion with bad titles from
+   before this fix (a separate backfill pass would be needed for those, not
+   done yet).
 4. Use `scoreOneGrant(item, yourResponse)` from `src/score-with-claude.js`
    (wraps `combineScores` — same thing, this is what has test coverage)
 5. Collect all results into `scoredGrants` array
@@ -195,6 +221,64 @@ verdict; a research result used to be trusted forever, which is how that
 happened). Capped at 5/run for cost control, and exposes them for Claude
 Code to research live with WebSearch/WebFetch — no third-party search API,
 no API key.
+
+**A concrete deadline is now REQUIRED from every deep-research pass
+(Ricardo, 2026-09-12)** — found live: nearly every already-researched grant
+had a solid prose estimate in its report ("~Q1 2027, based on the last 3
+cycles") that never made it into the actual `Deadline` property; the field
+just sat on "Rolling" regardless, because the old `discovered_deadline`
+field (2026-09-11) only fired for a CURRENT confirmed date, not an
+estimate. Replaced with `best_deadline_date` + `deadline_confidence` in the
+Part 2 JSON (`src/scorer/research-prompts.js`) — Claude must now pick one of
+four branches and always produce a real date except in the genuinely rare
+case: `confirmed` (current open round), `estimated_annual` (inferred next
+cycle from a recurring pattern), `historical` (no annual evidence, but the
+last actual past deadline is used AS-IS rather than leaving the field
+blank), `rolling` (only when the funder's own language explicitly states no
+fixed cycle — Ricardo's belief, matching what this project's own source
+mix confirms, is that this should be rare, not the default). Applied via
+`computeDeadlineFields()` (`src/notion-client.js`, shared by
+`deep-research.js` and `notion-sync.js` — one implementation, not two that
+drift apart) — writes `Deadline`, a `Deadline Note` marked "≈ ... (estimado)"
+or "... (última fecha conocida — próxima ronda sin confirmar)" for anything
+short of `confirmed`, and a new `Deadline Confidence` select property so a
+guess is never visually indistinguishable from a verified date.
+
+**Likelihood % → recommendation thresholds lowered (Ricardo, 2026-09-11)**:
+the mapping table in `src/scorer/research-prompts.js` (the deep-research
+prompt's "How to map likelihood % to recommendation" section) now reads
+40-100% → APPLY_NOW, 20-39% → CONSIDER, 10-19% → MONITOR, 0-9% → SKIP — down
+from 70/50/30/10. Real opportunities were landing on MONITOR too often at the
+old cutoffs; Ricardo wants anything with a plausible (20%+) shot surfaced as
+CONSIDER instead. This only changes deep-research's likelihood-based verdict
+(`research.recommendation`, which `effectiveRecommendation()` in
+`notion-sync.js` treats as authoritative over the surface score) — it does
+NOT touch `src/scorer/index.js`'s separate `final_score` tier thresholds
+(APPLY_NOW ≥3.8, CONSIDER ≥3.2, MONITOR ≥2.5) used for grants that haven't
+been deep-researched yet.
+
+**Deadline discovery + live staleness fix (Ricardo, 2026-09-11)**: found live —
+GEF SGP CSO Challenge Program's real Sept 15 deadline was sitting in its
+deep-research report text since 2026-08-22, but the page's `Deadline`
+property stayed empty (original scrape only saw "rolling"), so it was
+invisible to any Notion view sorted/filtered by deadline. Two fixes:
+1. The research prompt's Part 2 JSON now has a `discovered_deadline` field
+   (`src/scorer/research-prompts.js`) — when live research finds a concrete
+   date the scrape missed, both `saveResearchResults` (backlog grants,
+   `src/deep-research.js`) and `buildProperties` (same-day grants,
+   `src/notion-sync.js`) now write it into the real `Deadline` date property
+   AND recompute `Deadline Note`, not just prose in Research Summary.
+   `formatDeadlineNote()` itself moved to `notion-client.js` so both call
+   sites share one implementation instead of drifting apart.
+2. Separately, `Deadline Note`'s "Xd left!" text only ever refreshes when a
+   page happens to get PATCHed (rescore, research, near-miss) — most pages
+   sit untouched for weeks and the count quietly goes wrong. Added a Notion
+   **formula** column, `Días Restantes (live)` (`ensureSchema()` in
+   `notion-sync.js`), computed by Notion itself from the `Deadline` date at
+   view time — always correct, no pipeline run required at all. Prefer this
+   column over `Deadline Note` for anything UI-facing (e.g. a "sort by
+   deadline" view) going forward; `Deadline Note` remains for historical/API
+   consumers that read rich_text rather than a live formula.
 
 **Duplicate-of-already-researched filter** (added 2026-08-22): the same real
 program routinely gets scraped from its own site AND from an aggregator
@@ -312,6 +396,109 @@ code, not YAML:
    never `/posts/` or `/about/` (those hit LinkedIn's login wall even
    through Jina Reader). Config under `linkedin:` in sources.yaml; add an
    org by appending a `sources:` entry — no code changes needed
+
+**`resolveLnkdInUrl()` never actually worked until 2026-09-11** — found live
+while backfilling ~45 bad Notion titles, nearly all LinkedIn-sourced.
+`lnkd.in` short links don't do an HTTP redirect at all; they serve a 200 OK
+"You're leaving LinkedIn" interstitial whose real destination is rendered
+client-side via JS. The old implementation used `axios.get()` with
+`maxRedirects`, which has no JS engine — `responseUrl` was always just the
+lnkd.in URL itself, silently, for as long as this scraper has existed. That
+means every LinkedIn grant's `url` has been the unusable short link, not the
+funder's real page — which also fed directly into `enricher.js` reading the
+SAME interstitial's text instead of the funder's, a real chunk of why
+LinkedIn measured only 39% deadline-capture vs 78-95% for portal sources
+with working detail-page URLs (see the 2026-09-11 backfill/audit). Fixed by
+switching to Playwright (`getPage`/`safeGoto`, same as `enricher.js`/
+`digest-expander.js`) to read the rendered destination link. **Test
+implication**: `test/linkedin.test.js`'s `fetchLinkedInSources` orchestration
+tests mocked only `axios.get` — since the real fixture (`COMPANY_PAGE_MD`)
+contains real lnkd.in links, those tests started launching an ACTUAL browser
+against live lnkd.in URLs once this shipped (confirmed: turned 3 near-
+instant tests into 10+ second real-network calls). `mockPlaywrightNoOp(t)`
+in that test file mocks `playwright-base`'s `getPage`/`safeGoto` too — any
+new test that exercises `fetchLinkedInSources` against a fixture containing
+real external links needs this same mock, not just the axios one.
+
+**Multi-opportunity posts were silently losing all but one link** (fixed
+same day): a post bundling several distinct opportunities ("Descubre 4
+fondos para responder a emergencias...") only ever kept the FIRST external
+link (`external_urls.find(...)`) under one generic collective title — the
+other N-1 opportunities' links were discarded entirely, with no trace they
+'d ever existed. This is the same "one URL, many grants" shape
+`digest-expander.js` already exists to handle for Substack/email roundups;
+LinkedIn just never got the equivalent. `isMultiOpportunityPost(post)`
+(text matches `\d+ (oportunidades|fondos|convocatorias|opportunities|
+grants|funds)` AND 2+ distinct resolved external links) now routes such a
+post through `splitMultiOpportunityPost(post)` instead, which produces one
+grant record per distinct link — each with its own url, falling back to
+that link's own anchor text as title (kept on `external_urls[].label` now,
+previously discarded) or a numbered placeholder. Amount/deadline still come
+from the shared post text (can't attribute "$50,000" to link #2
+specifically from one combined announcement) — `enricher.js` re-fetches
+each record's own distinct url afterward and resolves that, same as it
+already does for `digest-expander.js` output.
+
+**Opinion/thought-leadership posts were being scored as candidate grants**
+(fixed 2026-09-12) — confirmed live: "2030 no es el final de los ODS." and
+"El verdadero reto de la IA para las OSC no es aprender a usar ChatGPT.",
+both pure opinion posts with zero fundable opportunity, made it all the way
+to a real Claude scoring call purely because they mentioned generic
+development-sector words ("financiamiento", "cooperación") in passing.
+`isLikelyOpportunityPost()`'s keyword list is now split into
+`STRONG_KEYWORDS` (specific enough alone — "grant", "convocatoria", "fund",
+"fellowship", etc.) vs `WEAK_KEYWORDS` (generic vocabulary — "fondo",
+"financiamiento", "cooperación", "funding" — that appears in ANY LATAM
+civil-society post regardless of whether a real opportunity exists). A weak
+keyword only counts alongside an actual `ACTION_CUE_PATTERN` match (aplica,
+postula, deadline, plazo, convocatoria abierta, etc.) — on its own it no
+longer flips a post positive. Downstream Claude scoring still correctly
+tiers anything that slips through as `⛔ Ineligible` — this fix just stops
+wasting a scoring call and a permanent Notion row on posts that were never
+going to be anything else.
+
+**LinkedIn's "Edited" badge was being read as literal post content** (fixed
+same day) — a post LinkedIn marks as edited-after-publishing gets a
+different `raw_text` (and therefore a different fingerprint + a garbage
+"Edited ¡..." title) than the same post before the edit, creating a fresh
+duplicate Notion page for something already reviewed. Added `/^\s*edited\s+/i`
+to `BOILERPLATE_PATTERNS` in `linkedin.js` so it's stripped before
+fingerprinting/title-deriving, same as the other UI-chrome patterns already
+handled there ("X followers", "Like/Comment/Share", etc.).
+
+**Cross-source duplicate pages — fixed 2026-09-12, with an honest caveat**
+(found while diagnosing why Stanley 1913 Creators Fund's deep, candid
+manual analysis existed but the pipeline's own research never ran): the
+EasyGrant listing and the funder's own official site (stanley1913.com)
+had each gotten their own Notion page — 2.42/Skip and 2.68/Monitor
+respectively — because `grantFingerprint()` keys off domain, and neither
+ever won a deep-research slot alone since each competed as a separate,
+weaker candidate instead of one consolidated one. The two pages were
+manually merged (see `output/title_deadline_corrections.json`), and
+`notion-sync.js`'s sync loop now calls `findFuzzyMatch()` (reusing
+`grantsMatch()` from `utils/grant-fingerprint.js`) against every existing
+page BEFORE deciding a grant is genuinely new — a candidate that fuzzy-
+matches an existing page gets merged into it (`updatePage()`, logged as
+"merged" in the sync summary) instead of creating a duplicate.
+
+**Caveat, found by testing against the real cases before trusting the
+fix**: `grantsMatch()`'s original word-overlap check required >= 3
+significant words per title, which "Stanley 1913 Creators Fund" (only 2
+words after stopword/year stripping: "stanley", "creators") never cleared
+no matter how identical the two postings were. Added a narrow exact-match
+rule for the 2-word case specifically (requires ALL words shared, not just
+>= 60%, to avoid a new false-positive class — verified live that "Youth
+Climate Fund" vs "Youth Climate Prize" correctly still do NOT match). This
+fixes Stanley-1913-shaped duplicates. It does **NOT** fix GEF SGP CSO
+Challenge Program's case (WePropel vs LinkedIn) — "GEF"/"SGP" never appear
+as literal uppercase letters in the funder's own fully-spelled-out title
+("Global Environment Facility - Small Grants Program..."), and the two
+titles share zero literal words at all, so neither the acronym check nor
+word-overlap can ever match them. That needs an acronym-expansion glossary
+(GEF -> Global Environment Facility, etc.), a fundamentally different
+mechanism — not built, flagged as a known open gap in
+`test/notion-sync.test.js`'s GEF SGP test (asserts current non-match
+behavior, not a placeholder for "should eventually pass").
 
 Geography/theme relevance is a **scoring** concern (`org-profile.yaml`
 matched per-grant in `src/scorer/rules.js`), not a scraping-layer

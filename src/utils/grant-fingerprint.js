@@ -112,6 +112,29 @@ function grantsMatch(a, b) {
     }
   }
 
+  // Short-title exact match (Ricardo, 2026-09-12 — confirmed live: "Stanley
+  // 1913 Creators Fund" vs "Stanley 1913 Creators Fund – 2026 Program", a
+  // real duplicate across EasyGrant and the funder's own site, has only 2
+  // significant words each after stopword/year stripping — under the
+  // general >= 3 branch above, too short to ever qualify no matter how
+  // identical). Requiring EXACT set equality (not just >= 0.60 overlap)
+  // for these short 2-word cases avoids the false-positive risk a looser
+  // threshold would introduce (e.g. "Youth Climate Fund" / "Youth Climate
+  // Prize" sharing 2 of 3 words at 67% — clearly different programs).
+  // Known remaining gap, NOT covered by this: an acronym-only name vs its
+  // fully-spelled-out official name sharing zero literal tokens (e.g. "GEF
+  // SGP CSO Challenge" vs "Global Environment Facility - Small Grants
+  // Program - CSO Challenge Program") — that needs an acronym-expansion
+  // glossary, out of scope here.
+  if (wa.size === 2 && wb.size === 2 && wa.size === wb.size) {
+    const shared = [...wa].filter(w => wb.has(w)).length;
+    if (shared === 2) {
+      const yearA = extractYear(a.title), yearB = extractYear(b.title);
+      if (yearA && yearB && yearA !== yearB) return false;
+      return true;
+    }
+  }
+
   return false;
 }
 

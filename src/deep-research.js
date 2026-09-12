@@ -21,7 +21,7 @@ const path = require('path');
 const yaml = require('yaml');
 const { buildResearchPrompt } = require('./scorer/research-prompts');
 const { loadResearchCache, saveResearchCache, getResearch, setResearch } = require('./tracker/index');
-const { notionRequest, richText, notionPageToGrant, isResearchStale, agingBonus } = require('./notion-client');
+const { notionRequest, richText, notionPageToGrant, isResearchStale, agingBonus, computeDeadlineFields } = require('./notion-client');
 const { grantsMatch } = require('./utils/grant-fingerprint');
 
 const OUTPUT_DIR = path.join(process.cwd(), 'output');
@@ -222,6 +222,25 @@ global.saveResearchResults = async function saveResearchResults(results) {
         const tierName = TIER_TO_RECOMMENDATION_REVERSE[recommendation] || '⏭ Skip';
         const researchStatus = entry.appears_closed_or_expired ? 'Closed'
           : (entry.status_evidence == null ? 'Could not confirm' : 'Open');
+        // Ricardo, 2026-09-12: best_deadline_date is now REQUIRED from every
+        // deep-research pass (see prompts.js) — never null, "rolling" only
+        // when the funder explicitly has no fixed cycle. Found live: almost
+        // every already-researched grant had a solid prose estimate ("~Q1
+        // 2027") that never made it into the actual Deadline property —
+        // everything just sat on "Rolling" regardless, because the old
+        // discovered_deadline field only fired when a CURRENT confirmed date
+        // was found, not for estimates/historical dates. This writes
+        // whatever confidence tier produced the date, and marks it in
+        // Deadline Note + a dedicated Deadline Confidence property so an
+        // estimate is never silently indistinguishable from a confirmed
+        // date. Also recompute Deadline Note here — this is one of only two
+        // places a Notion page's Deadline Note can ever get refreshed (the
+        // other being notion-sync.js's shouldUpdate() path); without it,
+        // "Xd left!" text freezes at page-creation time and quietly goes
+        // wrong as days pass.
+        const deadlineConfidence = entry.deadline_confidence || null;
+        const { deadlineObj, deadlineNote } = computeDeadlineFields(entry.best_deadline_date, deadlineConfidence);
+
         const resp = await notionRequest('PATCH', `pages/${grant._notion_page_id}`, {
           properties: {
             'Deep Researched': { checkbox: true },
@@ -229,6 +248,9 @@ global.saveResearchResults = async function saveResearchResults(results) {
             'Research Status': { select: { name: researchStatus } },
             'Research Summary': { rich_text: [{ text: { content: (report || '').slice(0, 1900) } }] },
             Tier: { select: { name: tierName } },
+            ...(deadlineConfidence ? { 'Deadline Confidence': { select: { name: deadlineConfidence } } } : {}),
+            ...(deadlineObj ? { Deadline: { date: deadlineObj } } : {}),
+            ...(deadlineNote ? { 'Deadline Note': { rich_text: [{ text: { content: deadlineNote } }] } } : {}),
             // Staleness bookkeeping (see isResearchStale above) — without
             // these, a backlog-sourced grant researched once stays excluded
             // from re-research forever, even after its score moves a lot.

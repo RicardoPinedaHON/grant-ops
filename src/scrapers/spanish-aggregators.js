@@ -48,6 +48,15 @@ async function fetchSpanishAggregators() {
       const items = await page.evaluate((src) => {
         const results = [];
         const articles = document.querySelectorAll(src.selectors.articles);
+        // Ricardo, 2026-09-11 — confirmed live: IKI Small Grants' `.title`
+        // selector sometimes matches a status badge ("Call closed") instead
+        // of the actual program name, because that site reuses the same
+        // heading-ish markup for both. A title that's ONLY a status word is
+        // never the real grant name on any of these sites — fall back to
+        // the link text, then the raw block text, rejecting this pattern at
+        // each step so a bad selector match doesn't silently become "the
+        // title" for downstream scoring/search/Notion.
+        const STATUS_ONLY_RE = /^(call\s+)?(open|closed|apply\s*now|now\s*open|now\s*closed)\.?$/i;
 
         for (const el of Array.from(articles).slice(0, 25)) {
           const titleEl = el.querySelector(src.selectors.title);
@@ -56,8 +65,12 @@ async function fetchSpanishAggregators() {
 
           if (!titleEl && !text) continue;
 
+          let title = titleEl?.textContent?.trim() || '';
+          if (!title || STATUS_ONLY_RE.test(title)) title = linkEl?.textContent?.trim() || '';
+          if (!title || STATUS_ONLY_RE.test(title)) title = text.slice(0, 100);
+
           results.push({
-            title: titleEl?.textContent?.trim() || text.slice(0, 100),
+            title,
             url: linkEl?.href || '',
             description: text.slice(0, 300),
           });

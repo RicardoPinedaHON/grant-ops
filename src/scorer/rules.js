@@ -196,7 +196,16 @@ function scoreSize(grant, profile) {
   if (amount < min) return maxWeight * 0.4;
   if (amount > max * 5) return maxWeight * 0.2;
   if (amount > max) return maxWeight * 0.5;
-  if (amount >= sweetMin && amount <= sweetMax) return maxWeight * 1.0;
+  if (amount >= sweetMin && amount <= sweetMax) {
+    // Graduated within the sweet spot: bigger grants score higher, not a flat
+    // max — a $300K grant is a better outcome than a $50K one even though
+    // both are "in range". Interpolates 0.85 (at sweetMin) -> 1.0 (at sweetMax),
+    // matching the 0.85 already given just above the sweet spot so the curve
+    // stays continuous at both boundaries.
+    const span = sweetMax - sweetMin;
+    const frac = span > 0 ? (amount - sweetMin) / span : 1;
+    return maxWeight * (0.85 + 0.15 * frac);
+  }
   if (amount >= min && amount < sweetMin) return maxWeight * 0.75;
   if (amount > sweetMax && amount <= max) return maxWeight * 0.85;
 

@@ -11,8 +11,8 @@
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
-const { grantFingerprint } = require('./utils/grant-fingerprint');
-const { isResearchStale } = require('./notion-client');
+const { grantFingerprint, grantsMatch } = require('./utils/grant-fingerprint');
+const { isResearchStale, formatDeadlineNote, computeDeadlineFields } = require('./notion-client');
 const { INELIGIBLE_FLAGS } = require('./scorer/index');
 
 function loadEnv() {
@@ -99,6 +99,31 @@ async function ensureSchema() {
     // scored SKIP by a narrow margin on a thin scraped description, not a
     // live open/closed investigation.
     'Near-Miss Checked':   { checkbox: {} },
+    // Ricardo, 2026-09-12: makes an estimated/historical deadline visibly
+    // distinct from a confirmed one, instead of a guess quietly looking
+    // identical to a verified date. See deep-research.js/notion-sync.js's
+    // deadline-writing logic — this is set whenever research produced a
+    // best_deadline_date, at whatever confidence level it came from.
+    'Deadline Confidence': { select: { options: [
+      { name: 'confirmed' }, { name: 'estimated_annual' },
+      { name: 'historical' }, { name: 'rolling' },
+    ] } },
+    // Live urgency indicator (Ricardo, 2026-09-11) — a Notion FORMULA
+    // column, computed by Notion itself at view time from the real
+    // `Deadline` date property. Exists because `Deadline Note` (the text
+    // version above) only gets refreshed when a page happens to get
+    // PATCHed — most pages sit untouched for weeks, so its "Xd left!" text
+    // silently drifts wrong. This column never goes stale; it needs no
+    // pipeline run at all to stay correct. Keep in sync with
+    // notion-client.js's formatDeadlineNote() thresholds (≤14d red, ≤45d
+    // yellow, else green) if those ever change.
+    'Días Restantes (live)': { formula: { expression:
+      'if(empty(prop("Deadline")), "🔄 Rolling", ' +
+      'if(dateBetween(prop("Deadline"), now(), "days") < 0, "⛔ Closed", ' +
+      'if(dateBetween(prop("Deadline"), now(), "days") <= 14, "🔴 " + format(dateBetween(prop("Deadline"), now(), "days")) + "d left!", ' +
+      'if(dateBetween(prop("Deadline"), now(), "days") <= 45, "🟡 " + format(dateBetween(prop("Deadline"), now(), "days")) + "d", ' +
+      '"🟢 " + format(dateBetween(prop("Deadline"), now(), "days")) + "d"))))'
+    } },
   };
   const toCreate = Object.fromEntries(
     Object.entries(needed).filter(([name]) => !existing.includes(name))
@@ -116,6 +141,10 @@ async function ensureSchema() {
 
 async function getExistingPages() {
   const pages = new Map();
+  // Flat list of every page, title+url included — used for the fuzzy
+  // cross-source dedup pass below (findFuzzyMatch), which the fingerprint/
+  // URL Map alone can't do since it only supports exact-key lookup.
+  const allPages = [];
   let cursor;
   do {
     const body = { page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) };
@@ -123,21 +152,41 @@ async function getExistingPages() {
     for (const page of (res.results || [])) {
       const fingerprint = page.properties?.Fingerprint?.rich_text?.[0]?.text?.content || '';
       const url = page.properties?.URL?.url || '';
+      const title = page.properties?.Name?.title?.[0]?.plain_text || '';
       const key = fingerprint || url;
-      if (!key) continue;
       const score = page.properties?.Score?.number ?? null;
       const tier  = page.properties?.Tier?.select?.name ?? null;
       const angle = page.properties?.['Application Angle']?.rich_text?.[0]?.text?.content ?? '';
       const researched = page.properties?.['Deep Researched']?.checkbox ?? false;
       // If both a fingerprint-keyed and url-keyed lookup could find this page,
       // register it under both so identityKeyFor() matches either way.
-      const entry = { pageId: page.id, score, tier, angle, researched };
-      pages.set(key, entry);
-      if (fingerprint && url) pages.set(url, entry);
+      const entry = { pageId: page.id, score, tier, angle, researched, title, url };
+      if (key) {
+        pages.set(key, entry);
+        if (fingerprint && url) pages.set(url, entry);
+      }
+      allPages.push(entry);
     }
     cursor = res.has_more ? res.next_cursor : null;
   } while (cursor);
-  return pages;
+  return { pages, allPages };
+}
+
+// Ricardo, 2026-09-12: exact fingerprint/URL matching misses the SAME real
+// grant scraped from two different sources — a portal aggregator, the
+// funder's own official site, and/or LinkedIn each produce a different
+// domain, hence a different fingerprint. Confirmed live 3 times (YCJF,
+// GEF SGP CSO Challenge Program, Stanley 1913 Creators Fund), each
+// splitting into two weaker orphaned pages that never won a deep-research
+// slot alone, competing against each other instead of being one stronger
+// candidate. `grantsMatch()` already exists and is already trusted for
+// exactly this kind of fuzzy identity check (deep-research.js's
+// filterAlreadyResearchedDuplicates) — reused here, BEFORE a new page
+// gets created, not just at research-target-selection time after the
+// fact. O(new candidates × existing pages) — cheap in practice (a few
+// dozen new grants per run against a few hundred existing pages).
+function findFuzzyMatch(grant, allPages) {
+  return allPages.find(p => p.pageId && grantsMatch(grant, { title: p.title, url: p.url }));
 }
 
 function identityKeyFor(grant) {
@@ -198,21 +247,6 @@ function formatAmount(grant) {
   return 'Amount TBD — see funder site';
 }
 
-function formatDeadlineNote(grant) {
-  const d = grant.deadline;
-  if (!d || d === 'rolling') return '🔄 Rolling — open call';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-    const dt   = new Date(d + 'T12:00:00Z');
-    const days = Math.round((dt - Date.now()) / 86400000);
-    const fmt  = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    if (days < 0)   return `⛔ Closed (${fmt})`;
-    if (days <= 14) return `🔴 ${fmt} (${days}d left!)`;
-    if (days <= 45) return `🟡 ${fmt} (${days}d)`;
-    return `🟢 ${fmt} (${days}d)`;
-  }
-  return `📅 ${d}`;
-}
-
 function buildScoreBreakdown(scoring) {
   const s  = scoring.scores || {};
   const cf = s.competitive_fit;
@@ -242,9 +276,24 @@ function buildProperties(grant, scoring, research, isCreate) {
   const themes = (grant.themes || []).slice(0, 10).map(t => ({ name: String(t).slice(0, 100) }));
   const fingerprint = grantFingerprint(grant);
 
-  let deadlineObj = null;
-  if (grant.deadline && /^\d{4}-\d{2}-\d{2}$/.test(grant.deadline))
-    deadlineObj = { start: grant.deadline };
+  // A live-researched best_deadline_date overrides the original scrape —
+  // it's what actually caught GEF SGP CSO Challenge Program's real Sept 15
+  // deadline after the scrape had only seen "rolling" (Ricardo, 2026-09-11).
+  // best_deadline_date is REQUIRED from research now (2026-09-12) — never
+  // null, and only "rolling" when the funder genuinely has no fixed cycle;
+  // confirmed/estimated_annual/historical all carry a real date, per
+  // deadline_confidence (see prompts.js and deep-research.js for the same
+  // logic applied to Notion-backlog grants).
+  const hasResearchDeadline = research?.best_deadline_date != null;
+  const { deadlineObj: researchDeadlineObj, deadlineNote: researchDeadlineNote } =
+    hasResearchDeadline ? computeDeadlineFields(research.best_deadline_date, research.deadline_confidence) : {};
+
+  // No research yet (or research gave no usable deadline at all) -> fall
+  // back to whatever the scrape/scoring pass already found.
+  const deadlineObj = hasResearchDeadline ? (researchDeadlineObj || null)
+    : (grant.deadline && /^\d{4}-\d{2}-\d{2}$/.test(grant.deadline) ? { start: grant.deadline } : null);
+  const effectiveDeadlineNote = hasResearchDeadline ? (researchDeadlineNote || formatDeadlineNote('rolling'))
+    : formatDeadlineNote(grant.deadline);
 
   const researchStatusName = research
     ? (research.appears_closed_or_expired ? 'Closed'
@@ -262,7 +311,8 @@ function buildProperties(grant, scoring, research, isCreate) {
     Country:{ rich_text: [{ text: { content: String(grant.country || '').slice(0, 200) } }] },
     ...(themes.length ? { Themes: { multi_select: themes } } : {}),
     Fingerprint:         { rich_text: [{ text: { content: fingerprint.slice(0, 200) } }] },
-    'Deadline Note':     { rich_text: [{ text: { content: formatDeadlineNote(grant) } }] },
+    'Deadline Note':     { rich_text: [{ text: { content: effectiveDeadlineNote } }] },
+    ...(research?.deadline_confidence ? { 'Deadline Confidence': { select: { name: research.deadline_confidence } } } : {}),
     'Score Breakdown':   { rich_text: [{ text: { content: buildScoreBreakdown(scoring).slice(0, 500) } }] },
     'Application Angle': { rich_text: [{ text: { content: String(scoring.application_angle || '').slice(0, 2000) } }] },
     'Best Projects':     { rich_text: [{ text: { content: (scoring.best_projects || []).join(', ').slice(0, 500) } }] },
@@ -485,18 +535,23 @@ async function syncToNotion(scoredGrants, researchCache) {
   console.log(`\n📋 Notion sync — ${sorted.length} grants (all tiers)...`);
 
   await ensureSchema();
-  const existing = await getExistingPages();
+  const { pages: existing, allPages } = await getExistingPages();
 
   const genuinelyNew = sorted.filter(g => !existing.has(identityKeyFor(g.grant))).length;
-  console.log(`   ${existing.size} in Notion now  ·  ${genuinelyNew} new candidates`);
+  console.log(`   ${existing.size} in Notion now  ·  ${genuinelyNew} new candidates (before fuzzy dedup)`);
 
-  let added = 0, updated = 0, skipped = 0, errors = 0;
+  let added = 0, updated = 0, merged = 0, skipped = 0, errors = 0;
 
   for (const { grant, scoring, research } of sorted) {
     const key = identityKeyFor(grant);
     const existingPage = key ? existing.get(key) : null;
+    // No exact fingerprint/URL match — check for the SAME real grant under
+    // a different domain before treating this as genuinely new (see
+    // findFuzzyMatch above).
+    const fuzzyMatch = existingPage ? null : findFuzzyMatch(grant, allPages);
+    const targetPage = existingPage || fuzzyMatch;
 
-    if (!existingPage) {
+    if (!targetPage) {
       // ── New grant: create ──
       try {
         const res = await notionRequest('POST', 'pages', {
@@ -508,10 +563,18 @@ async function syncToNotion(scoredGrants, researchCache) {
         else { errors++; if (res.message) console.error(`\n   ✗ create "${grant.title}": ${res.message}`); }
       } catch (err) { errors++; console.error(`\n   ✗ create "${grant.title}": ${err.message}`); }
 
-    } else if (shouldUpdate(existingPage, scoring, research)) {
+    } else if (fuzzyMatch) {
+      // ── Same grant, different source: merge into the existing page
+      // instead of creating a duplicate ──
+      try {
+        await updatePage(targetPage.pageId, grant, scoring, research);
+        merged++; process.stdout.write('≈');
+      } catch (err) { errors++; console.error(`\n   ✗ merge "${grant.title}" into existing page: ${err.message}`); }
+
+    } else if (shouldUpdate(targetPage, scoring, research)) {
       // ── Changed: update ──
       try {
-        await updatePage(existingPage.pageId, grant, scoring, research);
+        await updatePage(targetPage.pageId, grant, scoring, research);
         updated++; process.stdout.write('~');
       } catch (err) { errors++; console.error(`\n   ✗ update "${grant.title}": ${err.message}`); }
 
@@ -521,22 +584,22 @@ async function syncToNotion(scoredGrants, researchCache) {
     }
   }
 
-  console.log(`\n   ✅ ${added} new  ·  ${updated} re-scored  ·  ${skipped} unchanged  ·  ${errors} errors`);
+  console.log(`\n   ✅ ${added} new  ·  ${updated} re-scored  ·  ${merged} merged (cross-source dedup)  ·  ${skipped} unchanged  ·  ${errors} errors`);
 
   // Update the database header description with fresh stats
   try {
-    await updateDatabaseMeta(sorted, added, updated);
+    await updateDatabaseMeta(sorted, added, updated + merged);
     console.log(`   📊 Database stats header updated`);
   } catch (err) {
     console.error(`   ⚠  Could not update DB description: ${err.message}`);
   }
 
-  if (added > 0 || updated > 0) {
+  if (added > 0 || updated > 0 || merged > 0) {
     console.log(`   🔗 https://www.notion.so/${DB_ID.replace(/-/g, '')}`);
   }
 }
 
-module.exports = { syncToNotion };
+module.exports = { syncToNotion, findFuzzyMatch, identityKeyFor };
 
 // Allow running standalone: node src/notion-sync.js
 if (require.main === module) {

@@ -88,6 +88,16 @@ test('buildScoringPrompt: requests JSON-only output in the exact shape combineSc
   }
 });
 
+// Regression coverage for the 2026-09-11 fix (score-with-claude.js's
+// applyExtractionCorrections): the prompt must actually ask for these two
+// fields, or Claude never has a reason to return them and the correction
+// silently never fires.
+test('buildScoringPrompt: requests clean_title and corrected_deadline for extraction-quality fixes', () => {
+  const prompt = buildScoringPrompt(MOCK_GRANT, MOCK_PROFILE, MOCK_PRESCORE);
+  assert.ok(prompt.includes('"clean_title"'));
+  assert.ok(prompt.includes('"corrected_deadline"'));
+});
+
 test('buildOrgSummary: surfaces the org\'s real projects, not a generic placeholder', () => {
   const summary = buildOrgSummary(MOCK_PROFILE);
   assert.ok(summary.includes('Clean Air Project'));

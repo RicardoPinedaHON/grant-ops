@@ -19,7 +19,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 
-const { scoreOneGrant, buildDistribution, saveScoredGrants } = require('../src/score-with-claude');
+const { scoreOneGrant, buildDistribution, saveScoredGrants, applyExtractionCorrections } = require('../src/score-with-claude');
 
 function makePrescoredItem(overrides = {}) {
   return {
@@ -71,6 +71,55 @@ test('scoreOneGrant: a real per-grant Claude judgment is NOT the manual-scorer b
 
 test('scoreOneGrant: throws clearly on a missing index rather than silently scoring undefined', () => {
   assert.throws(() => scoreOneGrant(undefined, {}), /No prescored item given/);
+});
+
+// Regression coverage for the 2026-09-11 fix: scraper-extracted title/deadline
+// are regex/selector-based and confirmed live to be wrong often (LinkedIn hook
+// sentences, digest roundup link text, a status badge scraped as a title).
+// Claude corrects both from the same description text it already reads to
+// score — see prompts.js's "Clean title & deadline correction" section.
+test('applyExtractionCorrections: replaces a bad scraped title with Claude\'s clean_title', () => {
+  const grant = { title: '¿Su organización lidera iniciativas comunitarias de impacto?', deadline: 'rolling' };
+  const updated = applyExtractionCorrections(grant, { clean_title: 'GYCAF Community Seed Grant 2026' });
+  assert.equal(updated.title, 'GYCAF Community Seed Grant 2026');
+});
+
+test('applyExtractionCorrections: leaves title unchanged when clean_title is absent or too short', () => {
+  const grant = { title: 'Original Title', deadline: 'rolling' };
+  assert.equal(applyExtractionCorrections(grant, {}).title, 'Original Title');
+  assert.equal(applyExtractionCorrections(grant, { clean_title: '' }).title, 'Original Title');
+  assert.equal(applyExtractionCorrections(grant, { clean_title: 'Hi' }).title, 'Original Title');
+});
+
+test('applyExtractionCorrections: applies a corrected_deadline found in the description text', () => {
+  const grant = { title: 'Song Foundation', deadline: 'rolling' };
+  const updated = applyExtractionCorrections(grant, { corrected_deadline: '2027-03-15' });
+  assert.equal(updated.deadline, '2027-03-15');
+});
+
+test('applyExtractionCorrections: accepts "rolling" as an explicit corrected_deadline', () => {
+  const grant = { title: 'Test', deadline: null };
+  const updated = applyExtractionCorrections(grant, { corrected_deadline: 'rolling' });
+  assert.equal(updated.deadline, 'rolling');
+});
+
+test('applyExtractionCorrections: null/malformed corrected_deadline leaves the original deadline alone', () => {
+  const grant = { title: 'Test', deadline: '2026-09-15' };
+  assert.equal(applyExtractionCorrections(grant, { corrected_deadline: null }).deadline, '2026-09-15');
+  assert.equal(applyExtractionCorrections(grant, { corrected_deadline: 'sometime next year' }).deadline, '2026-09-15');
+  assert.equal(applyExtractionCorrections(grant, {}).deadline, '2026-09-15');
+});
+
+test('scoreOneGrant: the returned grant carries corrections, not the raw scraped one', () => {
+  const item = makePrescoredItem({ grant: { title: 'Call closed', deadline: 'rolling' } });
+  const claudeResponse = {
+    mission_alignment: 0.9, competitive_fit: -0.1, strategic_fit: 0,
+    best_projects: [], application_angle: null, confidence: 'medium', reasoning: 'ok',
+    clean_title: 'IKI Small Grants Programme', corrected_deadline: '2026-11-30',
+  };
+  const { grant } = scoreOneGrant(item, claudeResponse);
+  assert.equal(grant.title, 'IKI Small Grants Programme');
+  assert.equal(grant.deadline, '2026-11-30');
 });
 
 test('buildDistribution: tallies recommendations across scored grants', () => {

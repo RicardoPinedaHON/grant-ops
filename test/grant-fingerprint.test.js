@@ -89,3 +89,26 @@ test('grantFingerprint: real funder domains fingerprint by domain+year, collapsi
   const b = grantFingerprint({ title: 'Youth4Climate — How to Apply 2026', url: 'https://www.youth4climate.org/how-to-apply' });
   assert.equal(a, b);
 });
+
+// Regression coverage for the 2026-09-12 fix: short titles (2 significant
+// words after stopword/year stripping) never qualified for the >= 3 word
+// overlap check no matter how identical — confirmed live as a real
+// duplicate (Stanley 1913 Creators Fund, scraped from both EasyGrant and
+// the funder's own site).
+test('grantsMatch: short titles (2 significant words) that are otherwise identical DO match', () => {
+  const a = { title: 'Stanley 1913 Creators Fund', url: 'https://app.easygrant.io/lists/discover/abc' };
+  const b = { title: 'Stanley 1913 Creators Fund – 2026 Program', url: 'https://www.stanley1913.com/pages/stanley-1913-creators-fund' };
+  assert.equal(grantsMatch(a, b), true);
+});
+
+test('grantsMatch: short titles sharing only 1 of 2 words do NOT match (avoids the "Youth Climate Fund" vs "Youth Climate Prize" false positive)', () => {
+  const a = { title: 'Youth Climate Fund', url: 'https://a.org/x' };
+  const b = { title: 'Youth Climate Prize', url: 'https://b.org/y' };
+  assert.equal(grantsMatch(a, b), false);
+});
+
+test('grantsMatch: an acronym-only title vs its fully-spelled-out name is a KNOWN, unfixed gap (GEF SGP case)', () => {
+  const a = { title: 'Convocatoria de Subvención abierta! GEF SGP CSO Challenge', url: 'https://lnkd.in/dmZWe5id' };
+  const b = { title: 'Global Environment Facility - Small Grants Program - CSO Challenge Program', url: 'https://csochallenge.org/#apply' };
+  assert.equal(grantsMatch(a, b), false);
+});

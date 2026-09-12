@@ -119,6 +119,9 @@ linkedin:
     - name: "The Possibilists"
       url: "https://www.linkedin.com/company/thepossibilists/"
       enabled: true
+    - name: "Innpactia"
+      url: "https://www.linkedin.com/company/innpactia/"
+      enabled: true
 
 scrapers:
   - name: "fundsforNGOs - Honduras"

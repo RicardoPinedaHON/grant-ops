@@ -191,6 +191,25 @@ test('isPostSeen/markPostSeen: does not collide with grant-level history keys', 
 
 // ── 6. fetchLinkedInSources orchestration (axios mocked — no live network) ─
 
+// Regression guard (2026-09-11): resolveLnkdInUrl() switched from axios to
+// Playwright (axios never actually worked against lnkd.in's JS-rendered
+// interstitial — see its comment in linkedin.js). Mocking only axios.get
+// (as these tests already did) is no longer enough: COMPANY_PAGE_MD's real
+// lnkd.in links now make fetchLinkedInSources launch an ACTUAL browser and
+// navigate to the real, live lnkd.in URLs during what must be a hermetic
+// unit test — confirmed live, turned 3 near-instant tests into 10+ second
+// real-network calls. Mock the playwright-base layer too, same pattern as
+// mockAxiosGetSequence below.
+const playwrightBase = require('../src/scrapers/playwright-base');
+function mockPlaywrightNoOp(t) {
+  t.mock.method(playwrightBase, 'getPage', async () => ({
+    waitForTimeout: async () => {},
+    evaluate: async () => null,
+    close: async () => {},
+  }));
+  t.mock.method(playwrightBase, 'safeGoto', async () => true);
+}
+
 function mockAxiosGetSequence(t, responses) {
   let call = 0;
   t.mock.method(axios, 'get', async () => {
@@ -202,6 +221,7 @@ function mockAxiosGetSequence(t, responses) {
 }
 
 test('fetchLinkedInSources: a failing source does not abort the others (resilience)', async (t) => {
+  mockPlaywrightNoOp(t);
   mockAxiosGetSequence(t, [
     { error: new Error('ECONNRESET simulated network failure') },
     { data: COMPANY_PAGE_MD },
@@ -258,6 +278,7 @@ test('fetchLinkedInSources: disabled config returns empty result without making 
 // (the same one scan.js loads/saves as history.json).
 
 test('fetchLinkedInSources: second run against an unchanged page yields zero new posts and zero duplicate opportunities', async (t) => {
+  mockPlaywrightNoOp(t);
   t.mock.method(axios, 'get', async () => ({ data: COMPANY_PAGE_MD }));
 
   const config = {
@@ -299,6 +320,7 @@ test('fetchLinkedInSources: only genuinely new posts are processed when some pos
     return `Title: ONGLink | LinkedIn\n\nMarkdown Content:\n## Updates\n\n${body}\n\n## Join now\n`;
   }
 
+  mockPlaywrightNoOp(t);
   let call = 0;
   const responses = [markdownFromPosts(fivePosts), markdownFromPosts(sevenPosts)];
   t.mock.method(axios, 'get', async () => ({ data: responses[call++] }));
@@ -388,4 +410,128 @@ test('describeJinaError: falls back to err.message entirely for a plain network 
   const err = new Error('timeout of 45000ms exceeded');
   const described = li.describeJinaError(err);
   assert.equal(described, 'timeout of 45000ms exceeded');
+});
+
+// Regression coverage for the 2026-09-11 fix: deriveTitle() used to always
+// grab whichever came first (a rhetorical hook sentence or emoji-laced
+// intro), burying the actual program name mid-post. Confirmed live against
+// ~45 real bad Notion titles before this fix — almost all LinkedIn-sourced.
+test('deriveTitle: finds a real program name buried after a hook sentence, instead of the hook itself', () => {
+  const text = 'Oportunidad de financiamiento para la conservación de la biodiversidad 🌎 🏆 Whitley Award 2027 – Whitley Fund for Nature ¿Lideras un proyecto de conservación?';
+  assert.match(li.deriveTitle(text), /Whitley Award 2027/);
+});
+
+test('deriveTitle: finds a program name after an emoji mid-sentence', () => {
+  const text = 'Oportunidad de financiamiento para grupos de artesanas y artesanos 🎨 Canvas Home Small Grants 2026 ofrece subvenciones de hasta $10,000.';
+  assert.match(li.deriveTitle(text), /Canvas Home Small Grants 2026/);
+});
+
+test('deriveTitle: falls back to the old pipe/sentence heuristic when no program-name pattern exists', () => {
+  // No "Award/Grant/Fund/..." noun anywhere — same behavior as before this fix.
+  const text = 'Convocatoria abierta para organizaciones de sociedad civil | Reece Foundation – apoyo institucional';
+  assert.equal(li.deriveTitle(text), 'Convocatoria abierta para organizaciones de sociedad civil');
+});
+
+test('deriveTitle: strips leading ¡/¿ hook punctuation, not just emoji', () => {
+  const text = '¡Oportunidad laboral! Buscamos coordinador de proyectos.';
+  const title = li.deriveTitle(text);
+  assert.ok(!title.startsWith('¡'));
+});
+
+// Regression coverage for the 2026-09-11 multi-opportunity-post fix:
+// postToGrantRecord() used to keep only the FIRST external link of a post
+// bundling several opportunities ("Descubre 4 fondos...") — the other N-1
+// were silently discarded, along with any info about which opportunity was
+// which. Confirmed live against ~45 real bad Notion titles.
+function makePost(overrides = {}) {
+  return {
+    source_name: 'Test Org', source_url: 'https://linkedin.com/company/test/',
+    post_text: 'Descubre 4 fondos para responder a emergencias y fortalecer la resiliencia de tu iniciativa.',
+    hashtags: [], mentioned_organizations: [],
+    fingerprint: 'fp_test_123', detected_at: '2026-09-11T00:00:00.000Z',
+    raw_metadata: { canonical_source: 'linkedin.com/company/test', post_url: null, activity_id: null, reactions_count: null },
+    external_urls: [
+      { original_url: 'https://fund-a.org/apply', resolved_url: null, label: 'Fund A Emergency Grant' },
+      { original_url: 'https://fund-b.org/apply', resolved_url: null, label: 'Fund B Relief Program' },
+      { original_url: 'https://fund-c.org/apply', resolved_url: null, label: 'Fund C Recovery Fund' },
+    ],
+    ...overrides,
+  };
+}
+
+test('isMultiOpportunityPost: true when text says "N fondos/oportunidades" AND there are multiple distinct links', () => {
+  assert.equal(li.isMultiOpportunityPost(makePost()), true);
+});
+
+test('isMultiOpportunityPost: false for a normal single-opportunity post, even with N in unrelated text', () => {
+  const post = makePost({
+    post_text: 'Convocatoria abierta para 1 programa de becas.',
+    external_urls: [{ original_url: 'https://fund-a.org/apply', resolved_url: null, label: 'Fund A' }],
+  });
+  assert.equal(li.isMultiOpportunityPost(post), false);
+});
+
+test('isMultiOpportunityPost: false when the "N opportunities" phrase matches but all links resolve to the same URL', () => {
+  const post = makePost({
+    external_urls: [
+      { original_url: 'https://lnkd.in/aaa', resolved_url: 'https://directory.example.com/list', label: '' },
+      { original_url: 'https://lnkd.in/bbb', resolved_url: 'https://directory.example.com/list', label: '' },
+    ],
+  });
+  assert.equal(li.isMultiOpportunityPost(post), false);
+});
+
+test('splitMultiOpportunityPost: produces one grant record per distinct link, using each link\'s own label as title', () => {
+  const records = li.splitMultiOpportunityPost(makePost());
+  assert.equal(records.length, 3);
+  assert.deepEqual(records.map(r => r.title), ['Fund A Emergency Grant', 'Fund B Relief Program', 'Fund C Recovery Fund']);
+  assert.deepEqual(records.map(r => r.url), ['https://fund-a.org/apply', 'https://fund-b.org/apply', 'https://fund-c.org/apply']);
+  // IDs must be distinct so they don't collide/dedupe against each other downstream.
+  assert.equal(new Set(records.map(r => r.id)).size, 3);
+});
+
+test('splitMultiOpportunityPost: falls back to a numbered title when a link has no usable label', () => {
+  const post = makePost({
+    external_urls: [
+      { original_url: 'https://fund-a.org/apply', resolved_url: null, label: '' },
+      { original_url: 'https://fund-b.org/apply', resolved_url: null, label: 'x' },
+    ],
+  });
+  const records = li.splitMultiOpportunityPost(post);
+  assert.match(records[0].title, /\(opción 1\/2\)$/);
+  assert.match(records[1].title, /\(opción 2\/2\)$/);
+});
+
+// Regression coverage for the 2026-09-12 false-positive fix: generic
+// development-sector words (financiamiento/cooperación/fondo) used to be
+// enough BY THEMSELVES to flag a pure opinion/thought-leadership post as a
+// candidate grant. Confirmed live against two real false positives.
+test('isLikelyOpportunityPost: a pure opinion post mentioning "financiamiento" in passing is NOT an opportunity', () => {
+  const text = '2030 no es el final de los ODS. El financiamiento y la cooperación internacional deben repensarse para la próxima década.';
+  assert.equal(li.isLikelyOpportunityPost(text), false);
+});
+
+test('isLikelyOpportunityPost: a thought-leadership post about AI mentioning "fondos" is NOT an opportunity', () => {
+  const text = 'El verdadero reto de la IA para las OSC no es aprender a usar ChatGPT, sino usar mejor sus fondos y datos existentes.';
+  assert.equal(li.isLikelyOpportunityPost(text), false);
+});
+
+test('isLikelyOpportunityPost: a weak keyword IS enough when paired with a real action/deadline cue', () => {
+  const text = 'Convocatoria abierta: fondos disponibles para organizaciones de base. Aplica antes del 30 de octubre.';
+  assert.equal(li.isLikelyOpportunityPost(text), true);
+});
+
+test('isLikelyOpportunityPost: strong keywords (grant/fund/convocatoria) still work alone, unchanged', () => {
+  assert.equal(li.isLikelyOpportunityPost('Reece Foundation Grant Program now open for applications.'), true);
+  assert.equal(li.isLikelyOpportunityPost('Open Technology Fund — Internet Freedom Fund.'), true);
+});
+
+// Regression coverage for the "Edited" LinkedIn UI badge bug: it was being
+// read as literal post content, producing a nonsense title AND a duplicate
+// fingerprint for the same underlying post before/after being edited.
+test('stripBoilerplate (via extractUpdates): a leading "Edited" badge is not treated as post content', () => {
+  const md = `Title: TestOrg | LinkedIn\n\nMarkdown Content:\n## Updates\n\n*   [](https://bo.linkedin.com/company/testorg)100 followers\n\n1h  Edited ¡La espera terminó! Nuevo fondo disponible para jóvenes líderes.\n\n## Join now\n`;
+  const posts = li.extractUpdates(md);
+  assert.equal(posts.length, 1);
+  assert.ok(!/^edited/i.test(posts[0].raw_text.trim()), `raw_text should not start with "Edited": "${posts[0].raw_text.slice(0, 40)}"`);
 });
