@@ -72,11 +72,16 @@ later turn. If a step is slow, that's fine — just wait for it.
    judgment: `{ mission_alignment, competitive_fit, strategic_fit,
    best_projects, application_angle, confidence, reasoning }`. Set
    `_ineligible: true` on anything that isn't really an org-level grant at
-   all (an internship, an individual fellowship, a webinar/workshop, a paid
-   course ad, a consultancy contract, a vendor marketing post, an
-   aggregator's own blog post about grants in general — these show up
-   constantly from RSS/LinkedIn/email sources and the pre-filter doesn't
-   catch all of them). This is the whole point of this step — do not paste
+   all (an internship, a webinar/workshop, a paid course ad, a consultancy
+   contract, a vendor marketing post, an aggregator's own blog post about
+   grants in general — these show up constantly from RSS/LinkedIn/email
+   sources and the pre-filter doesn't catch all of them). Do NOT put
+   individual fellowships/prizes in this bucket (Ricardo, 2026-09-14) —
+   score those normally and use `reasoning` to state the individual-
+   eligibility criteria (age, career stage, etc.) and whether a real angle
+   exists (someone at the org applying personally, funding then benefiting
+   the org's work); flag in `reasoning` if the deciding fact is something
+   only Ricardo can confirm. This is the whole point of this step — do not paste
    in placeholder/generic reasoning; if two grants are actually different,
    their reasoning should read differently.
       Since this needs a second process to persist (same reason every

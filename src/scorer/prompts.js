@@ -94,6 +94,18 @@ so use it to correct both, for free, in the same pass):
   as "YYYY-MM-DD" or the literal string "rolling". If the Description gives
   you no more date information than the Deadline field already shows,
   return null — do not guess a date that isn't actually stated.
+- corrected_amount_max / corrected_amount_min: same idea, for money (Ricardo,
+  2026-09-14 — too many new grants land in Notion as "Amount TBD" even when
+  the scraped Description text plainly states a figure; enricher.js's regex
+  only sees the funder's OWN page, not this description, and Brave Search
+  only runs for grants that are STILL missing an amount after that — so if
+  the description already has it, use it now, no extra step needed). Return
+  plain numbers (no currency symbol, no commas) if the Description states a
+  ceiling/range not already reflected in the Amount field above — e.g. "up
+  to $50,000" -> corrected_amount_max: 50000; "$10,000-$50,000" -> both
+  populated. If the Description gives no more amount information than
+  what's already shown, return null for both — do not guess a figure that
+  isn't actually stated.
 
 Respond in this exact JSON format (no other text):
 {
@@ -105,7 +117,9 @@ Respond in this exact JSON format (no other text):
   "confidence": "<high|medium|low>",
   "reasoning": "<2-3 sentences: what helps AND what hurts, naming concrete gaps>",
   "clean_title": "<the real grant/program name>",
-  "corrected_deadline": "<YYYY-MM-DD, or the word rolling, or null>"
+  "corrected_deadline": "<YYYY-MM-DD, or the word rolling, or null>",
+  "corrected_amount_max": <number or null>,
+  "corrected_amount_min": <number or null>
 }`;
 }
 

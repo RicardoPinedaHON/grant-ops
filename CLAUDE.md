@@ -81,13 +81,25 @@ After running scan.js, load `output/grants_prescored.json`. For each item:
      "confidence": "high|medium|low",
      "reasoning": "2-3 sentences: what specifically helps AND hurts",
      "_ineligible": true,  // OPTIONAL — set this if the item isn't really an
-                           // org-level grant at all (individual fellowship,
-                           // internship, webinar/workshop, paid course ad,
-                           // consultancy contract, vendor marketing post, an
-                           // aggregator's own blog post about grants) — these
-                           // slip past the pre-filter constantly from RSS/
-                           // LinkedIn/email sources and forcing INELIGIBLE
-                           // here is more honest than a low-but-nonzero score
+                           // org-level grant at all (internship, webinar/
+                           // workshop, paid course ad, consultancy contract,
+                           // vendor marketing post, an aggregator's own blog
+                           // post about grants) — these slip past the
+                           // pre-filter constantly from RSS/LinkedIn/email
+                           // sources and forcing INELIGIBLE here is more
+                           // honest than a low-but-nonzero score.
+                           // Do NOT include "individual fellowship/prize" in
+                           // this bucket (Ricardo, 2026-09-14) — those were
+                           // getting auto-killed with zero real analysis.
+                           // Score it normally instead, and use `reasoning`
+                           // to state the individual-eligibility criteria
+                           // (age, career stage, nationality) and whether a
+                           // real angle exists (someone at the org applying
+                           // personally, with the funding benefiting the
+                           // org's actual work) — flag in `reasoning` if the
+                           // deciding fact (e.g. the founder's exact age) is
+                           // something only Ricardo can confirm, rather than
+                           // guessing either way.
      "clean_title": "the real grant/program name",   // see below
      "corrected_deadline": "YYYY-MM-DD | rolling | null"  // see below
    }

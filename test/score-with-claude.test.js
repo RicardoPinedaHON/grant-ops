@@ -169,3 +169,28 @@ test('saveScoredGrants: writes grants_scored.json and returns real file paths', 
   assert.equal(written.length, 2);
   assert.equal(written[0].grant.title, 'Real Grant A');
 });
+
+// Regression coverage for the 2026-09-14 fix: enricher.js's regex only
+// reads the funder's OWN page — a figure stated right in the scraped
+// description (which Claude already reads to score the grant) was going
+// unused, landing as "Amount TBD" in Notion even when a figure was one
+// sentence away.
+test('applyExtractionCorrections: applies a corrected amount found in the description text', () => {
+  const grant = { title: 'Test', amount_max: null, amount_min: null };
+  const updated = applyExtractionCorrections(grant, { corrected_amount_max: 50000 });
+  assert.equal(updated.amount_max, 50000);
+});
+
+test('applyExtractionCorrections: applies both min and max when a range is given', () => {
+  const grant = { title: 'Test', amount_max: null, amount_min: null };
+  const updated = applyExtractionCorrections(grant, { corrected_amount_min: 10000, corrected_amount_max: 50000 });
+  assert.equal(updated.amount_min, 10000);
+  assert.equal(updated.amount_max, 50000);
+});
+
+test('applyExtractionCorrections: null/zero/missing corrected amounts leave the original untouched', () => {
+  const grant = { title: 'Test', amount_max: 25000, amount_min: null };
+  assert.equal(applyExtractionCorrections(grant, { corrected_amount_max: null }).amount_max, 25000);
+  assert.equal(applyExtractionCorrections(grant, { corrected_amount_max: 0 }).amount_max, 25000);
+  assert.equal(applyExtractionCorrections(grant, {}).amount_max, 25000);
+});

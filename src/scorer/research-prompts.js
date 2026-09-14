@@ -98,6 +98,31 @@ ${grantSummary}
    geography, sector, project stage, co-financing, reporting burden,
    language/format of application) — flag anything that is a hard blocker
    vs. soft/negotiable.
+
+   **Individual-applicant-only programs are NOT an automatic INELIGIBLE**
+   (Ricardo, 2026-09-14 — found live: "individual founder only" grants were
+   getting auto-killed with no real analysis, even when a real angle
+   existed). If the ONLY blocker is that the program funds individuals
+   (a founder, a researcher, a fellow) rather than organizations directly,
+   do NOT default to INELIGIBLE. Instead:
+   - State the exact individual-eligibility criteria you found (age range,
+     nationality, career stage, etc.) verbatim — this is often the single
+     fact that decides whether it's worth pursuing at all.
+   - Assess whether a plausible angle exists: could a specific person at
+     the org (e.g. its founder/director) apply personally, with the prize/
+     fellowship/funding then benefiting the org's actual work? Say so
+     explicitly if this reframing is credible for this specific program's
+     structure (some individual awards fund the person's own project work,
+     which can BE the org's work; others are pure personal career grants
+     with no route back to the org — tell these apart, don't default to
+     either).
+   - If the deciding factor is information you don't have (e.g. the
+     org founder's exact age against a stated cutoff), say so explicitly
+     in FOLLOW-UP STRATEGY as something Ricardo needs to confirm — do not
+     silently assume disqualification OR silently assume eligibility.
+     Only wrong structural blockers unrelated to who's applying (wrong
+     country, wrong sector, wrong legal entity type) still justify
+     INELIGIBLE on their own.
 6. Estimate how competitive this call likely is (applicant pool size if
    knowable, selectivity signals, whether it favors flagship/known
    organizations).
@@ -173,7 +198,11 @@ instead of getting buried at MONITOR):
 - 20-39%   -> CONSIDER
 - 10-19%   -> MONITOR (unless the funder is not strategically worth tracking, then SKIP)
 - 0-9%     -> SKIP
-- Hard structural disqualifier found (wrong legal status, wrong country, etc.) -> INELIGIBLE regardless of %
+- Hard structural disqualifier found (wrong legal status, wrong country, wrong
+  sector, etc.) -> INELIGIBLE regardless of %. "Funds individuals, not orgs"
+  is NOT on its own one of these — see step 5's individual-applicant
+  guidance above; score it on the merits of whether a real personal-
+  application angle exists instead.
 
 Step 2 — timing gate (apply AFTER step 1, only when step 1 produced
 APPLY_NOW): APPLY_NOW means "act now." If the call is closed/expired AND

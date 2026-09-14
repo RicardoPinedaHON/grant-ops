@@ -488,7 +488,40 @@ async function updateDatabaseMeta(scoredGrants, newCount, updatedCount) {
   const monitor    = recs.filter(r => r === 'MONITOR').length;
   const ineligible = recs.filter(r => r === 'INELIGIBLE').length;
   const skip       = recs.filter(r => r === 'SKIP').length;
-  const researched = withScore.filter(g => g.research).length;
+
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  // Ricardo, 2026-09-14: this used to be `withScore.filter(g => g.research)`
+  // — how many of TODAY's freshly-scanned grants happen to carry a research
+  // object. Nearly always wrong: deep-research.js pulls most of its targets
+  // from the Notion BACKLOG (grants scored on a past run), not today's
+  // batch — confirmed live, a run that genuinely deep-researched 5 grants
+  // still showed "🔎 0 deep-researched" because none of the 5 were among
+  // today's scan. A live query for pages with `Last Researched` = today is
+  // accurate regardless of which script (this sync, or deep-research.js's
+  // direct backlog PATCH) actually touched them.
+  let researched = 0;
+  try {
+    const res = await notionRequest('POST', `databases/${DB_ID}/query`, {
+      filter: { property: 'Last Researched', date: { equals: todayStr } },
+      page_size: 1,
+    });
+    // We only need the count, but Notion's query API doesn't return a bare
+    // count — page through has_more to get the real total (deep-research
+    // is capped at 5/run so this is always a handful of requests at most).
+    researched = (res.results || []).length;
+    let cursor = res.has_more ? res.next_cursor : null;
+    while (cursor) {
+      const next = await notionRequest('POST', `databases/${DB_ID}/query`, {
+        filter: { property: 'Last Researched', date: { equals: todayStr } },
+        page_size: 100, start_cursor: cursor,
+      });
+      researched += (next.results || []).length;
+      cursor = next.has_more ? next.next_cursor : null;
+    }
+  } catch (err) {
+    console.error(`   ⚠  Could not count today's deep-researched grants: ${err.message}`);
+  }
 
   const dateStr = new Date().toLocaleDateString('en-US', {
     month: 'long', day: 'numeric', year: 'numeric',
@@ -502,7 +535,7 @@ async function updateDatabaseMeta(scoredGrants, newCount, updatedCount) {
   ].filter(Boolean).join('  ·  ');
 
   const line1 = `🕐 Last scan: ${dateStr} (Honduras time)${deltaStr ? '   ·   ' + deltaStr : ''}`;
-  const line2 = `📊 ${total} analyzed   🚀 ${applyNow} Apply Now   ⭐ ${consider} Consider   👀 ${monitor} Monitor   ⏭ ${skip} Skip   ⛔ ${ineligible} Ineligible   🔎 ${researched} deep-researched`;
+  const line2 = `📊 ${total} analyzed   🚀 ${applyNow} Apply Now   ⭐ ${consider} Consider   👀 ${monitor} Monitor   ⏭ ${skip} Skip   ⛔ ${ineligible} Ineligible   🔎 ${researched} deep-researched today`;
 
   await notionRequest('PATCH', `databases/${DB_ID}`, {
     description: [{ type: 'text', text: { content: line1 + '\n' + line2 } }],

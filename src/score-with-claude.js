@@ -73,6 +73,19 @@ function applyExtractionCorrections(grant, claudeResponse) {
     updated.deadline = correctedDeadline;
   }
 
+  // Ricardo, 2026-09-14 — same idea as title/deadline: enricher.js's regex
+  // only reads the funder's own page, not this scraped description, so a
+  // figure stated right here in the description was going unused, landing
+  // as "Amount TBD" in Notion even when the answer was one sentence away.
+  const correctedAmountMax = Number(claudeResponse.corrected_amount_max);
+  if (Number.isFinite(correctedAmountMax) && correctedAmountMax > 0) {
+    updated.amount_max = correctedAmountMax;
+  }
+  const correctedAmountMin = Number(claudeResponse.corrected_amount_min);
+  if (Number.isFinite(correctedAmountMin) && correctedAmountMin > 0) {
+    updated.amount_min = correctedAmountMin;
+  }
+
   return updated;
 }
 
