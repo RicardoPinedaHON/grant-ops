@@ -21,15 +21,6 @@ const { qualifyTitle } = require('../src/utils/title-naming');
 const APPLY = process.argv.includes('--apply');
 const LOG = path.join(ROOT, 'output', 'title_renames.json');
 
-// Pages whose title carried a "[Fondo sin identificar] ... revisar manualmente"
-// label from the 2026-09-11 manual backfill. The real fund is unknown (the
-// link resolves to a directory homepage), so drop the label and say plainly
-// where it came from.
-const MANUAL = new Map([
-  ['3c47f46e-cafe-818f-bc2b-db5edb55f7e7', 'Capital semilla y cofinanciamiento para organizaciones comunitarias (vía Fondos y Convocatorias)'],
-  ['3b57f46e-cafe-81e5-a1aa-e5e2dbc844f5', 'Espacios de juego y desarrollo para niñez y juventud (vía Fondos y Convocatorias)'],
-]);
-
 // Titles checked by hand where the stored Funder is really the program/channel.
 const LEAVE_AS_IS = new Set(['Ventra Capital']);
 
@@ -54,7 +45,7 @@ async function fetchAll(dbId) {
   for (const p of await fetchAll(dbId)) {
     const old = (p.properties.Name?.title || []).map(t => t.plain_text).join('');
     if (LEAVE_AS_IS.has(old.trim())) continue;
-    const next = MANUAL.get(p.id) || qualifyTitle(old.trim(), txt(p, 'Funder'), txt(p, 'Source'));
+    const next = qualifyTitle(old.trim(), txt(p, 'Funder'), txt(p, 'Source'));
     if (next && next !== old.trim()) plan.push({ id: p.id, oldTitle: old, newTitle: next });
   }
   console.log(`${plan.length} rename(s) ${APPLY ? 'to apply' : '(dry run)'}:`);
