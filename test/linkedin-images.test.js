@@ -86,3 +86,13 @@ test('mergeImageTextIntoPost leaves the post untouched when the image had no rea
   const p = { post_text: 'x' };
   assert.equal(mergeImageTextIntoPost(p, '   '), p);
 });
+
+test('captionNeedsImage: flyer-style short captions yes; captions that already carry deadlines/amounts/links no', () => {
+  const { captionNeedsImage } = require('../src/scrapers/linkedin');
+  assert.equal(captionNeedsImage({ ...fx.tarbell_single, post_text: '🔔 Convocatorias de la semana, mira la imagen', external_urls: [] }), true);
+  assert.equal(captionNeedsImage(fx.host_three_grants), false);   // 3 grants with amounts and deadlines in the text
+  assert.equal(captionNeedsImage(fx.innpactia_five), false);       // 5 grants with funder links
+  assert.equal(captionNeedsImage(fx.tarbell_single), false);       // single grant, text is complete
+  const vague = 'Hay una nueva convocatoria abierta para organizaciones juveniles de la región. Revisa todos los detalles en la imagen que acompaña este post y comparte con quienes puedan postular. '.repeat(3);
+  assert.equal(captionNeedsImage({ ...fx.tarbell_single, post_text: vague, external_urls: [] }), true);
+});

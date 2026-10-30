@@ -34,6 +34,8 @@ const AGGREGATOR_DOMAINS = new Set([
   // url identifies the poster, never the grant. Subdomains (es.linkedin.com)
   // are covered by isAggregatorDomain().
   'linkedin.com',
+  // Startup Networks re-lists other funders' grants under /links/link/<id>-<slug>.
+  'startupnetworks.co.uk',
 ]);
 
 function isAggregatorDomain(domain) {
@@ -124,6 +126,50 @@ function sameHostDifferentProgram(a, b) {
   return !(union && shared / union >= 0.5);
 }
 
+// "GirlUp Project Awards" vs "Girl Up Project Awards 2026": same title once
+// spaces, punctuation, diacritics and the year are gone. Compound-word spelling
+// differences defeat word-overlap matching (found by the LinkedIn repeat audit,
+// 2026-10-30). Short titles are excluded to avoid accidental collisions.
+function squashTitle(title) {
+  return (title || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\b20\d{2}\b/g, '').replace(/^the\s+/, '').replace(/[^a-z0-9]+/g, '');
+}
+
+// Acronym <-> spelled-out name for funders whose programs show up both ways
+// ("UNEP Small Grants Program 2026" vs "UN Environment Programme Small Grants
+// Programme"). Deliberately small; add entries as real pairs are found. A match
+// through this table also requires the REST of the title to agree, so
+// "UNEP Finance Initiative" is not treated as "UNEP Small Grants".
+const ACRONYM_EXPANSIONS = [
+  ['UNEP', /\b(?:united nations|un) environment(?:al)? programme?\b/i],
+  ['GEF', /\bglobal environment(?:al)? facility\b/i],
+  ['UNDP', /\bunited nations development programme?\b/i],
+  ['GCF', /\bgreen climate fund\b/i],
+  ['IDB', /\binter-?american development bank\b/i],
+  ['IUCN', /\binternational union for conservation of nature\b/i],
+  ['FAO', /\bfood and agriculture organization\b/i],
+  ['IKI', /\binternational climate initiative\b/i],
+];
+const GLOSSARY_ACRONYMS = new Set(ACRONYM_EXPANSIONS.map(([ac]) => ac));
+const RESIDUAL_FILLER = new Set(['the','and','for','of','to','in','call','grant','grants','fund','funds','program','programme','programa','initiative','award','awards']);
+
+function expandKnownAcronyms(title) {
+  let t = title || '';
+  for (const [ac, re] of ACRONYM_EXPANSIONS) t = t.replace(re, ac);
+  return t;
+}
+
+function residualWords(title, acronyms) {
+  return new Set((title || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\b20\d{2}\b/g, '').split(/[^a-z0-9]+/)
+    .filter(w => w.length >= 3 && !RESIDUAL_FILLER.has(w) && !acronyms.some(ac => ac.toLowerCase() === w)));
+}
+
+function yearsCompatible(a, b) {
+  const yearA = extractYear(a.title), yearB = extractYear(b.title);
+  return !(yearA && yearB && yearA !== yearB);
+}
+
 function grantsMatch(a, b) {
   const ua = cleanUrl(a.url), ub = cleanUrl(b.url);
   // Identical LinkedIn page urls say nothing about the grant (see above).
@@ -137,6 +183,19 @@ function grantsMatch(a, b) {
     if (yearA && yearB && yearA !== yearB) return false;
     return true;
   }
+
+  // Spelled-out vs acronym form of a known funder (see ACRONYM_EXPANSIONS).
+  const ea = expandKnownAcronyms(a.title), eb = expandKnownAcronyms(b.title);
+  if (ea !== a.title || eb !== b.title) {
+    const shared = extractAcronyms(ea).filter(ac => GLOSSARY_ACRONYMS.has(ac) && extractAcronyms(eb).includes(ac));
+    if (shared.length && yearsCompatible(a, b)) {
+      const ra = residualWords(ea, shared), rb = residualWords(eb, shared);
+      if (ra.size === rb.size && [...ra].every(w => rb.has(w))) return true;
+    }
+  }
+
+  const sqA = squashTitle(a.title), sqB = squashTitle(b.title);
+  if (sqA.length >= 12 && sqA === sqB && yearsCompatible(a, b)) return true;
 
   const acA = extractAcronyms(a.title || '');
   const acB = extractAcronyms(b.title || '');

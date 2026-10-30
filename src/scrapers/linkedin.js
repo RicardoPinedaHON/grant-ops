@@ -885,12 +885,24 @@ function writePendingImages(list) {
   fs.writeFileSync(IMAGE_PENDING_FILE(), JSON.stringify(list, null, 2));
 }
 
-// A new post is worth reading images for when its caption already looks like an
-// opportunity OR is short (flyer-style: "mira la imagen", "convocatorias de la semana").
+// Read a post's images only when the caption alone is not enough:
+//   - the caption is short (flyer-style: "mira la imagen", "convocatorias de la semana"), or
+//   - it looks like an opportunity but yields nothing usable: no deadline, no
+//     amount and no funder link in any of its records.
+// Captions that already carry deadlines/amounts/links (Startup Networks, HOST
+// bulletins) skip the images — their pictures only repeat the text or are banners.
+function captionNeedsImage(post) {
+  const caption = post.post_text || '';
+  if (caption.length < 500) return true;
+  if (!isLikelyOpportunityPost(caption)) return false;
+  const records = splitPostIntoRecords(post);
+  return records.every(r => !r.deadline && !r.amount_max && r._url_is_fallback);
+}
+
 async function queuePostImages(post, cfg, imageIndex, hasRoom) {
   if (!hasRoom || !imageIndex) return null;
   const caption = post.post_text || '';
-  if (!(isLikelyOpportunityPost(caption) || caption.length < 500)) return null;
+  if (!captionNeedsImage(post)) return null;
   const imgs = require('./linkedin-images');
   const picked = await imageIndex.get();
   const urls = imgs.matchPostToImages(post, picked);
@@ -1024,6 +1036,7 @@ module.exports = {
   splitPostIntoRecords,
   expandMagnitudes,
   IMAGE_PENDING_FILE,
+  captionNeedsImage,
   resolveLnkdInUrl,
   normalizeText,
   normalizeForMatch,

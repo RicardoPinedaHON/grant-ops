@@ -501,6 +501,26 @@ instruction) per target. Pasting 13 KB prompts into Agent calls is where the
 before each run and as the last pipeline step). The validate skill no longer writes
 to the log itself; the wrapper appends its stdout with real timestamps.
 
+**Repeat validation for LinkedIn grants (2026-10-30)** — pages re-list the same grants
+(a roundup and then each grant's own post; weekly bulletins; the same grant on
+two pages). Layers, in order: (1) `deduplicateGrants()` inside a run — same funder
+url or matching title, logged as `Dedup: "<a>" = "<b>"`; (2) `isKnown()`/`findKnown()`
+against history.json — scan.js now writes a `REPEAT "<title>" = "<prior title>"
+(same id | same fingerprint, first seen <date>)` line per skipped grant to the scan
+log plus a `LinkedIn: N records, M repeats, K new` line; (3) notion-sync's
+`findFuzzyMatch()` merges into an existing page. `grantsMatch()` gained a
+spacing-insensitive title rule ("GirlUp" = "Girl Up") and a small acronym table
+(`ACRONYM_EXPANSIONS`: UNEP/GEF/UNDP/GCF/IDB/IUCN/FAO/IKI ↔ spelled-out; the rest of
+the title must agree) — both found by `scripts/audit-linkedin-repeats.js`, a
+read-only tool that fetches the live pages with an empty history and says which
+extracted grants are repeats in-run, known in history, already in Notion, or new.
+Run it after adding a source or changing matching. Known borderline, NOT changed:
+two programs of one funder sharing 3 of 4 title words (Social Shifters "MoveNow
+Social Innovation Challenge" vs "Global Innovation Challenge 2026") match and merge.
+`startupnetworks.co.uk` is an aggregator domain (it re-lists other funders' grants).
+Image reading is skipped when the caption already carries deadlines/amounts/links
+(`captionNeedsImage()`): Startup Networks and HOST images only repeated the text.
+
 **Opinion/thought-leadership posts were being scored as candidate grants**
 (fixed 2026-09-12) — confirmed live: "2030 no es el final de los ODS." and
 "El verdadero reto de la IA para las OSC no es aprender a usar ChatGPT.",

@@ -130,6 +130,9 @@ linkedin:
     - name: "Innpactia"
       url: "https://www.linkedin.com/company/innpactia/"
       enabled: true
+    - name: "Startup Networks"
+      url: "https://www.linkedin.com/company/startup-networks/"
+      enabled: true
 
 scrapers:
   - name: "fundsforNGOs - Honduras"

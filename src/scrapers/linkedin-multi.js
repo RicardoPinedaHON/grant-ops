@@ -112,7 +112,7 @@ const MARKER_KINDS = [
 // Where the list ends and the poster's call-to-action / footer begins.
 const TAIL_CUT_PAT = new RegExp(
   '\\s(?:Looking for|¿?Buscas|Buscas|Podr[aá]s|Explora|Sign up|Suscr[ií]b|Reg[ií]strate|Follow|S[ií]guenos|Comparte|Share|' +
-  'Para m[aá]s|M[aá]s info|Read more|Learn more|Visit|Visita|📥|🌟|🔎|📲|📣|📩|🔔|👇)|\\s#[\\p{L}\\p{N}_]',
+  'Para m[aá]s|M[aá]s info|Read more|Learn more|Visit|Visita|Don.t miss|Know someone|Tag (?:them|a|someone)|📥|🌟|🔎|📲|📣|📢|📩|🔔|👇|⏰)|\\s#[\\p{L}\\p{N}_]',
   'u'
 );
 
@@ -126,8 +126,13 @@ const DEADLINE_CUE_PAT = /\b(closes?|cierra|deadline|fecha l[ií]mite|hasta el|p
 // enough there — the item needs a link, an amount or a deadline cue.
 function looksLikeGrantSegment(seg, strict = false) {
   if (seg.length < 20) return false;
-  if (/https?:\/\//.test(seg) || MONEY_PAT.test(seg) || DEADLINE_CUE_PAT.test(seg)) return true;
-  return !strict && GRANT_WORD_PAT.test(seg);
+  if (strict) {
+    // Feature bullets ("🔹 Up to £5,000 per organisation", "🔹 Applications
+    // assessed on a rolling basis") carry one fact each. A grant item carries its
+    // own link, or an amount AND a deadline.
+    return /https?:\/\//.test(seg) || (MONEY_PAT.test(seg) && DEADLINE_CUE_PAT.test(seg));
+  }
+  return /https?:\/\//.test(seg) || MONEY_PAT.test(seg) || DEADLINE_CUE_PAT.test(seg) || GRANT_WORD_PAT.test(seg);
 }
 
 const STRICT_KINDS = new Set(['bullet', 'right-arrow-emoji']);
@@ -147,20 +152,25 @@ function findNumberedMarkers(text) {
   return seq.length >= 2 ? seq : null;
 }
 
+// Outermost structure wins, not the most frequent glyph: a roundup with items
+// "1. … 2. …" whose every item carries ✅ requirement bullets has MORE ✅ than
+// items (Startup Networks, 2026-10-30). Order = how likely the marker is to
+// number the grants themselves rather than describe one grant.
+const KIND_PRIORITY = ['numbered', 'keycap', 'arrow', 'right-arrow-emoji', 'bullet'];
+
 function findMarkers(text) {
-  let best = null;
+  const byKind = {};
   for (const kind of MARKER_KINDS) {
     const hits = [];
     let m;
     kind.re.lastIndex = 0;
     while ((m = kind.re.exec(text))) hits.push({ start: m.index, end: m.index + m[0].length });
-    if (hits.length >= 2 && hits.length <= 15 && (!best || hits.length > best.hits.length)) {
-      best = { kind: kind.name, hits };
-    }
+    if (hits.length >= 2 && hits.length <= 15) byKind[kind.name] = hits;
   }
   const numbered = findNumberedMarkers(text);
-  if (numbered && (!best || numbered.length > best.hits.length)) best = { kind: 'numbered', hits: numbered };
-  return best;
+  if (numbered) byKind.numbered = numbered;
+  const kind = KIND_PRIORITY.find(k => byKind[k]);
+  return kind ? { kind, hits: byKind[kind] } : null;
 }
 
 /**
@@ -198,11 +208,17 @@ function segmentPostText(text) {
 
 // ── Titles ───────────────────────────────────────────────────────────────
 
+const DESCRIPTION_START_PAT =
+  /\s(?:Cash prizes|Prizes|Grants|Grant funding|Funding|Fellowships|Support|Awards|Financiaci[oó]n|Apoyo)\s+(?:for|to|supporting|recognising|recognizing|helping|that|available|para|que)\b/;
+const MONEY_PREFIX_PAT = /^(?:Up to|Hasta|Prizes? up to|From|Desde)\s+(?:[$€£]|USD|EUR|GBP)\s?[\d.,]+\s?[kKmM]?\s*[–—-]\s+/;
+
 function deriveSegmentTitle(segText) {
   // Name ends where the link/👉 starts; descriptive blurbs are cut at the
   // first " For <audience>" / " Para ..." / " | " / ": " so a 3-line blurb
-  // doesn't become the title.
-  let head = segText.split(/👉|https?:\/\//)[0].trim();
+  // doesn't become the title. "Up to €100,000 – <Name>" keeps only <Name>.
+  let head = segText.split(/👉|🔗|https?:\/\//)[0].trim().replace(MONEY_PREFIX_PAT, '');
+  const descAt = head.search(DESCRIPTION_START_PAT);
+  if (descAt > 8) head = head.slice(0, descAt);
   if (head.length > 100) {
     const cutAt = head.search(/\s(?:For|Para|Dirigido|Open to|Supports?|Funds?|Empowers?)\s|\s\|\s|:\s/);
     if (cutAt > 5) head = head.slice(0, cutAt);

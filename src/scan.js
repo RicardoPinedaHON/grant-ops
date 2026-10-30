@@ -21,7 +21,7 @@ const chalk = require('chalk');
 const { fetchAllGrants } = require('./scrapers/index');
 const { buildPromptForClaude, scoreWithoutClaude, isNewsArticle, SKIP_THRESHOLD } = require('./scorer/index');
 const { prescoreGrant } = require('./scorer/rules');
-const { saveTSV, saveMarkdownReport, loadHistory, saveHistory, isKnown, markSeen } = require('./tracker/index');
+const { saveTSV, saveMarkdownReport, loadHistory, saveHistory, isKnown, findKnown, markSeen } = require('./tracker/index');
 const log = require('./logger');
 
 const PROFILE_PATH = path.join(process.cwd(), 'org-profile.yaml');
@@ -78,6 +78,19 @@ async function main() {
   const isAll = process.argv.includes('--all');
   const newGrants = isAll ? rawGrants : rawGrants.filter(g => !isKnown(g, history));
   const skippedCount = rawGrants.length - newGrants.length;
+
+  // Repeat audit: say which already-seen grant each skipped one repeats, so a
+  // wrongly-collapsed grant is visible in the scan log instead of silently gone.
+  if (!isAll && skippedCount) {
+    log.logSection(`SKIPPED AS ALREADY SEEN (${skippedCount})`);
+    for (const g of rawGrants.filter(x => isKnown(x, history))) {
+      const k = findKnown(g, history);
+      log.writeLine(`  REPEAT   "${g.title.slice(0, 60)}" | ${g.source} | = "${(k.title || '').slice(0, 50)}" (${k.via}${k.first_seen ? ', first seen ' + k.first_seen.slice(0, 10) : ''})`);
+    }
+    const liSkipped = rawGrants.filter(x => x.type === 'linkedin' && isKnown(x, history)).length;
+    const liTotal = rawGrants.filter(x => x.type === 'linkedin').length;
+    if (liTotal) console.log(chalk.cyan(`LinkedIn: ${liTotal} grant records, ${liSkipped} repeats of grants already seen, ${liTotal - liSkipped} new`));
+  }
 
   console.log(chalk.cyan(`\n${rawGrants.length} grants fetched, ${newGrants.length} new${skippedCount ? ` (${skippedCount} already seen)` : ''}`));
 

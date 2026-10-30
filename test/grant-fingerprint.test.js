@@ -139,3 +139,42 @@ test('isKnown: an old host+year fingerprint alias does not swallow a different p
   const econ = { id: 'li_1', title: '2027 Global Economic Prosperity Challenge', url: 'https://solve.mit.edu/challenges/2027-global-economic-prosperity-challenge' };
   assert.equal(isKnown(econ, history), false);
 });
+
+test('REGRESSION (LinkedIn repeat audit): "GirlUp Project Awards" is the same grant as "Girl Up Project Awards 2026"', () => {
+  const a = { title: 'GirlUp Project Awards', url: 'https://www.linkedin.com/company/allyforaction/' };
+  const b = { title: 'Girl Up Project Awards 2026', url: 'https://girlup.org/project-awards' };
+  assert.equal(grantsMatch(a, b), true);
+  // a different year is a different round
+  assert.equal(grantsMatch({ title: 'Girl Up Project Awards 2025', url: 'https://x.org/a' }, { title: 'GirlUp Project Awards 2026', url: 'https://y.org/b' }), false);
+});
+
+test('REGRESSION (LinkedIn repeat audit): "UN Environment Programme Small Grants Programme" is "UNEP Small Grants Program 2026"', () => {
+  const a = { title: 'UN Environment Programme Small Grants Programme', url: 'https://www.linkedin.com/company/allyforaction/' };
+  const b = { title: 'UNEP Small Grants Program 2026', url: 'https://www.unep.org/small-grants' };
+  assert.equal(grantsMatch(a, b), true);
+});
+
+test('acronym expansion does not merge different programs of the same funder', () => {
+  const small = { title: 'United Nations Environment Programme Small Grants Programme', url: 'https://a.org/1' };
+  const fin = { title: 'UNEP Finance Initiative Membership', url: 'https://b.org/2' };
+  assert.equal(grantsMatch(small, fin), false);
+  assert.equal(grantsMatch({ title: 'Youth Climate Fund', url: 'https://a.org/1' }, { title: 'Youth Climate Prize', url: 'https://b.org/2' }), false);
+});
+
+test('short or merely similar titles are not squashed into a match', () => {
+  assert.equal(grantsMatch({ title: 'Green Fund', url: 'https://a.org/1' }, { title: 'GreenFund', url: 'https://b.org/2' }), false);
+});
+
+test('findKnown says WHAT a skipped grant repeats (id match, fingerprint match, or none)', () => {
+  const { findKnown } = require('../src/tracker/index');
+  const fp = grantFingerprint({ title: 'GirlUp Project Awards', url: 'https://www.linkedin.com/company/x/' });
+  const history = {
+    li_a: { title: 'GirlUp Project Awards', first_seen: '2026-10-20T10:00:00Z', url: 'https://girlup.org/awards' },
+    [`fp:${fp}`]: { grant_id: 'li_a', title: 'GirlUp Project Awards', first_seen: '2026-10-20T10:00:00Z' },
+  };
+  assert.equal(findKnown({ id: 'li_a', title: 'x', url: '' }, history).via, 'same id');
+  const byFp = findKnown({ id: 'li_new', title: 'GirlUp Project Awards', url: 'https://www.linkedin.com/company/x/' }, history);
+  assert.equal(byFp.via, 'same fingerprint');
+  assert.equal(byFp.title, 'GirlUp Project Awards');
+  assert.equal(findKnown({ id: 'li_z', title: 'Totally Different Prize', url: 'https://www.linkedin.com/company/x/' }, history), null);
+});

@@ -113,3 +113,25 @@ test('the same link-less grant seen again (same title, LinkedIn url) is still re
   const b = { title: 'Social Shifters MoveNow Social Innovation Challenge', url: 'https://es.linkedin.com/company/allyforaction/' };
   assert.equal(grantsMatch(a, b), true);
 });
+
+const STARTUP_ROUNDUP = "🚨 Up to £175,000, €100,000 & £5,000 – 4 Funding Opportunities You Don't Want to Miss! We've rounded up 4 opportunities worth exploring! 👇 👩💼 1. Up to €100,000 – European Prize for Women Innovators 2027 Cash prizes recognising outstanding women entrepreneurs developing innovative businesses. ✅ Female founders and co-founders ✅ Eligible entrepreneurs across Europe, including the UK 💰 Prizes up to €100,000 📅 Deadline: 1 December 2026 🔗 https://lnkd.in/erXzUxkH 🤖 2. Up to £175,000 – Innovate UK Frontier AI: SME Champions Grant funding for UK businesses developing advanced artificial intelligence technologies. ✅ UK-registered startups and SMEs ✅ Businesses developing genuinely innovative AI technologies 💰 Up to £175,000 📅 Deadline: 11 November 2026 🔗 https://lnkd.in/dHPYqkau 🚀 3. Up to £5,000 – Horizon Europe Springboard Scheme Funding to help UK organisations prepare competitive European research and innovation proposals. ✅ UK businesses and research organisations 💰 Up to £5,000 📅 Deadline: 2 February 2027 (rolling) 🔗 https://lnkd.in/dMmFRwY9 💜 4. Up to £5,000 – Sir Bernard & Lady Schreier Foundation Grants supporting UK charities delivering essential mental health services. ✅ UK-registered mental health charities 💰 £500–£5,000 📅 Deadline: Rolling Applications 🔗 https://lnkd.in/dHSFsXr8 ⏰ Don't miss these funding opportunities! 📢 Know someone who could benefit? Tag them below or this post! #GrantFunding#StartupFunding";
+
+const STARTUP_SINGLE = "🚀 Up to £175,000 for UK AI Startups & SMEs – APPLY NOW! Innovate UK is offering grants of up to £175,000 through its Frontier AI: SME Champions, Phase 1 competition. 👥 Who Can Apply? ✅ UK-registered micro, small and medium-sized businesses ✅ AI and machine learning startups ✅ Companies with a clear route to commercialisation 💡 What Innovations Are Supported? 🏥 AI in Healthcare – Predictive healthcare. 🧬 Advanced Materials – AI-powered materials discovery. 💰 What's Available? 🔹 Up to £175,000 for micro and small businesses 🔹 Up to £150,000 for medium-sized businesses 🔹 £3.1 million total funding available 🔹 Up to 70% of eligible costs covered 📋 Important Requirements ✔️ Projects must have eligible costs between £150,000 and £250,000. ✔️ Applicants must apply independently. 📅 Deadline: 11 November 2026, 11am UK Time 🚨 APPLICATIONS OPEN – APPLY NOW! 🔗 https://lnkd.in/dHPYqkau 📢 Know a UK startup? Tag them below #StartupFunding";
+
+test('Startup Networks roundup: the numbered items win over the ✅ requirement bullets (4 grants, not 8+)', () => {
+  const seg = segmentPostText(STARTUP_ROUNDUP);
+  assert.equal(seg.kind, 'numbered');
+  assert.equal(seg.segments.length, 4);
+  assert.deepEqual(seg.segments.map(s => deriveSegmentTitle(s.text)), [
+    'European Prize for Women Innovators 2027',
+    'Innovate UK Frontier AI: SME Champions',
+    'Horizon Europe Springboard Scheme',
+    'Sir Bernard & Lady Schreier Foundation',
+  ]);
+  assert.ok(!/Don.t miss|Know someone/.test(seg.segments[3].text));
+});
+
+test('a single-grant post full of ✅/🔹/✔️ feature bullets is NOT split (each bullet is one fact, not a grant)', () => {
+  assert.equal(segmentPostText(STARTUP_SINGLE), null);
+  assert.equal(splitPostIntoRecords({ ...fx.tarbell_single, post_text: STARTUP_SINGLE, external_urls: [] }).length, 1);
+});
