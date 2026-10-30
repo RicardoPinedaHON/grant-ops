@@ -64,6 +64,22 @@ later turn. If a step is slow, that's fine — just wait for it.
         run failed; do flag it if it fails at 5:17 too, since that would
         mean the theory is wrong.
 
+   **1a-2.** Run `node src/linkedin-image-text.js`. Some LinkedIn posts show
+   their grants only inside an image (flyers, "convocatorias de la semana"
+   graphics). scan.js (config `linkedin.images.enabled`) downloads those
+   posts' pictures to `output/tmp_linkedin_images/` and queues them. If this
+   prints "No LinkedIn image posts to read this run.", move on to 1b. Otherwise:
+   use the Read tool on EVERY file listed in `=== LINKEDIN_IMAGE_TARGETS_JSON ===`,
+   write `output/linkedin_image_text.json` as `{ "<key>": "<text>" }` — every
+   visible grant name, funder, amount, deadline, eligibility and URL
+   transcribed verbatim, nothing inferred; `""` for an image with no funding
+   text (header banners, photos, quotes) — then run
+   `node src/linkedin-image-text.js --apply`. That merges the text into each
+   post, re-splits it into one grant per listed item, replaces the caption-only
+   records in `grants_prescored.json` (a post whose image had nothing keeps its
+   caption record) and DELETES the temp images. Do this BEFORE 1b so the new
+   grants get scored in the same pass.
+
    **1b.** Run `node src/score-with-claude.js`. Prints `Grants to score: N`
    and the list of titles with prompts. Read `output/grants_prescored.json`
    yourself (or use `global.prescored`, set if you `require()` this file
@@ -138,7 +154,7 @@ later turn. If a step is slow, that's fine — just wait for it.
    "Nothing to check this run", skip to step 3.
    For each target, spawn ONE subagent (`general-purpose`, no web tools
    needed — the funder's page text is already included in `recheck_prompt`)
-   using `target.recheck_prompt` verbatim, all in the same message so they
+   using `target.agent_prompt` (a one-line instruction that points the subagent at `target.prompt_file`, which holds `recheck_prompt` verbatim — never paste, summarize or paraphrase the prompt yourself; scoring the near-misses yourself instead of spawning subagents is not allowed), all in the same message so they
    run concurrently. Parse each subagent's trailing json block, then call
    `global.saveNearMissResults([{ grant, prescoreLike, result }, ...])` —
    e.g. `node -e "require('./src/near-miss-check.js');
@@ -172,8 +188,8 @@ later turn. If a step is slow, that's fine — just wait for it.
 
 5. For each target in `global.researchTargets`, spawn ONE subagent via the
    `Agent` tool (`subagent_type: "general-purpose"`, it needs
-   WebSearch/WebFetch) using `target.research_prompt` verbatim as the
-   prompt. Launch ALL targets' agents in the same message (multiple
+   WebSearch/WebFetch) using `target.agent_prompt` as the
+   prompt — it points the subagent at `target.prompt_file`, which holds `research_prompt` verbatim, so nothing is re-typed or paraphrased (do NOT have a subagent run deep-research.js itself and follow what it prints). Launch ALL targets' agents in the same message (multiple
    tool_use blocks) so they run concurrently. No third-party search API,
    no API key — WebSearch/WebFetch only (same rule as `grant-deep-research`).
 
@@ -206,8 +222,14 @@ later turn. If a step is slow, that's fine — just wait for it.
 ## After it's done
 
 Write one short line to stdout summarizing the run (sources fetched, new
-grants, new research results, final tier distribution) — this is what ends
-up in `output/logs/pipeline_run.log` via the wrapping .bat's redirect.
+grants, new research results, final tier distribution) — the launchd wrapper
+(`scripts/launchd-common.sh`, `run_claude`) appends your stdout to
+`logs/pipeline_run.log`. Do NOT write to that log file yourself.
+
+Last, run `node scripts/cleanup-temp.js --apply`: it deletes the `save-*-temp.js`
+driver scripts and prompt dumps this run created (they cannot be removed with
+`rm` in this headless run), plus `output/tmp_prompts/` and any leftover
+`output/tmp_linkedin_images/`. It only touches untracked scratch files.
 Ricardo reads the log or the Notion board itself; do not wait for a reply.
 
 ## Guardrails (do not change without Ricardo's say)

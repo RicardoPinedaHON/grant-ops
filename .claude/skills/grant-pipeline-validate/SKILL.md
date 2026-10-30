@@ -25,14 +25,14 @@ continuation.
 
 Check, in this order:
 
-1. `output/logs/pipeline_run.log` — does TODAY's date have a "Starting full
+1. `logs/pipeline_run.log` — does TODAY's date have a "Starting full
    pipeline run" line? If not, the scheduled 5:17am fire never happened at
    all (machine was off/asleep) — skip to Step 3 (run the whole pipeline).
 2. If today's run started, does it have a matching completion summary
    line after it (the kind of multi-paragraph "All N steps... Summary for
    the log" text `grant-full-pipeline` writes at the end)? If yes, the run
-   completed normally — log `[<timestamp>] Validation: pipeline completed
-   normally, nothing to do.` to `logs/pipeline_run.log` and stop. Don't
+   completed normally — print `Validation check: pipeline completed normally,
+   nothing to do.` plus the run totals to stdout and stop. Don't
    re-run anything just because you can.
 3. If today's run started but has NO completion summary: it's stuck or was
    killed. Check for a live hung process and where the pipeline actually
@@ -81,17 +81,20 @@ very beginning if today's run never started at all per Step 1.1). Follow
 that skill's instructions exactly for each step you run — this skill does
 not duplicate that logic, it just decides where to resume.
 
-## Step 4 — Always log the outcome
+## Step 4 — Always report the outcome (on stdout)
 
 Whether you found nothing wrong, found and fixed a hang, or ran the whole
-pipeline from scratch, append a clear entry to `output/logs/pipeline_run.log`
-(same file the main pipeline writes to, so Ricardo checks one place):
+pipeline from scratch, print ONE clear line to stdout. The launchd wrapper
+(`scripts/launchd-common.sh`, `run_claude`) already appends everything you
+print to `logs/pipeline_run.log` with the real timestamps around it — do NOT
+write to the log file yourself (a shell append is not permitted in this
+headless run, and a hand-typed timestamp is only a guess).
 
 ```
-[<timestamp>] Validation check: <one of: "pipeline completed normally,
-nothing to do" | "found pipeline never started (machine off?), ran full
-pipeline" | "found hung process after step <N>, killed it and resumed from
-step <N+1>">. <one-line summary of what got processed, if anything did.>
+Validation check: <one of: "pipeline completed normally, nothing to do" |
+"found pipeline never started (machine off?), ran full pipeline" | "found
+hung process after step <N>, killed it and resumed from step <N+1>">.
+<one-line summary of what got processed, if anything did.>
 ```
 
 ## Guardrails

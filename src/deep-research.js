@@ -373,8 +373,15 @@ if (require.main === module) (async () => {
   // no `require()` in the same process) — the calling agent can parse
   // target.research_prompt straight out of captured stdout instead of relying
   // on cross-process access to a JS global, which doesn't exist.
+  // Each research_prompt is also written to a file; spawn each subagent with
+  // that target's `agent_prompt` (a one-line "read this file" instruction) so the
+  // prompt reaches it verbatim without being re-typed by the orchestrator.
+  const { writePromptFiles } = require('./utils/prompt-files');
+  const withFiles = writePromptFiles('research', researchTargets, 'research_prompt');
+  global.researchTargets = withFiles;
+  console.log('\nSubagent prompt for target [i]: use withFiles[i].agent_prompt (see JSON below).');
   console.log('\n=== RESEARCH_TARGETS_JSON ===');
-  console.log(JSON.stringify(researchTargets));
+  console.log(JSON.stringify(withFiles));
 })();
 
 function appendResearchSection(saved) {

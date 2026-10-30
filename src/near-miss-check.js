@@ -75,6 +75,10 @@ function htmlToText(html) {
     .trim();
 }
 
+function isLinkedInUrl(url) {
+  try { return /(^|\.)linkedin\.com$/.test(new URL(url).hostname); } catch { return false; }
+}
+
 async function fetchPageText(url) {
   try {
     const res = await axios.get(url, {
@@ -265,7 +269,15 @@ if (require.main === module) (async () => {
   console.log(`Organization: ${profile.organization.name}`);
   console.log(`Band checked: score in [${NEAR_MISS_FLOOR.toFixed(2)}, ${MONITOR_THRESHOLD.toFixed(2)}), Tier = Skip, not yet checked`);
 
-  const allCandidates = await fetchNearMissCandidates();
+  // Link-less LinkedIn list items (a post naming 3 grants without links) carry
+  // the poster's LinkedIn page as their url. Fetching it re-judges the grant
+  // against LinkedIn's login wall, so skip them — WITHOUT marking them checked,
+  // so they aren't burned for good. Deep research (live search) covers them if
+  // they ever reach Monitor.
+  const fetched = await fetchNearMissCandidates();
+  const noFunderPage = fetched.filter(c => isLinkedInUrl(c.grant.url));
+  if (noFunderPage.length) console.log(`Skipping ${noFunderPage.length} candidate(s) whose url is a LinkedIn page, not a funder page.`);
+  const allCandidates = fetched.filter(c => !isLinkedInUrl(c.grant.url));
   const candidates = allCandidates.slice(0, limit);
   console.log(`Candidates in band: ${allCandidates.length}${allCandidates.length > limit ? ` (highest-scored ${limit} taken this run, ${allCandidates.length - limit} remain for next cycle)` : ''}`);
 
@@ -307,10 +319,13 @@ if (require.main === module) (async () => {
 
   targets.forEach((t, i) => console.log(`  [${i}] ${t.grant.title.slice(0, 70)}`));
 
-  global.nearMissTargets = targets;
+  const { writePromptFiles } = require('./utils/prompt-files');
+  const withFiles = writePromptFiles('nearmiss', targets, 'recheck_prompt');
+  global.nearMissTargets = withFiles;
+  console.log('Subagent prompt for target [i]: use withFiles[i].agent_prompt (see JSON below).');
 
   console.log('\n=== NEAR_MISS_TARGETS_JSON ===');
-  console.log(JSON.stringify(targets));
+  console.log(JSON.stringify(withFiles));
 })();
 
 module.exports = {

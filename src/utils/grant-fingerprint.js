@@ -27,7 +27,18 @@ const AGGREGATOR_DOMAINS = new Set([
   // it as a "same domain = same grant" signal (the non-aggregator branch in
   // grantsMatch) would collapse unrelated LinkedIn-sourced grants into one.
   'lnkd.in',
+  // linkedin.com itself: link-less LinkedIn posts fall back to the company
+  // page url, so every such grant shared one fingerprint ("linkedin.com||")
+  // and exact-url equality — the 2nd and 3rd grant of a post (and any later
+  // link-less post) were dropped as duplicates of the first. A LinkedIn page
+  // url identifies the poster, never the grant. Subdomains (es.linkedin.com)
+  // are covered by isAggregatorDomain().
+  'linkedin.com',
 ]);
+
+function isAggregatorDomain(domain) {
+  return AGGREGATOR_DOMAINS.has(domain) || /(^|\.)linkedin\.com$/.test(domain || '');
+}
 
 const GENERIC_ACRONYMS = new Set([
   'SDG','SDGS','NGO','NGOS','CSO','CBO','UN','EU','US','USA','AI','ICT',
@@ -59,6 +70,20 @@ function urlDomain(url) {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
 }
 
+function urlPathSegments(url) {
+  try { return new URL(url).pathname.split('/').filter(Boolean); } catch { return []; }
+}
+
+// Funder sites like solve.mit.edu/challenges/<slug> host MANY distinct
+// programs under one domain. A deep path (2+ segments) identifies the
+// program; a shallow one (/apply, /how-to-apply) is just a page of one
+// program, so those stay collapsible by domain+year like before.
+function programPathKey(url) {
+  const segs = urlPathSegments(url);
+  if (segs.length < 2) return '';
+  return segs.join('/').toLowerCase().replace(/\b20\d{2}\b/g, '').replace(/-{2,}/g, '-').replace(/-\//g, '/').replace(/\/-/g, '/').replace(/-$/, '');
+}
+
 function extractYear(title) {
   const m = (title || '').match(/\b(20\d{2})\b/);
   return m ? m[1] : null;
@@ -79,12 +104,34 @@ function titleWords(title) {
     .filter(w => w.length >= 4 && !TITLE_STOP.has(w));
 }
 
+// True when both URLs sit on the same non-aggregator host but point at
+// different deep program pages AND the titles give no evidence they are the
+// same grant (no shared acronym, <50% distinctive-word overlap). Confirmed
+// live 2026-10-30: "2027 Global Health Challenge" and "2027 Global Economic
+// Prosperity Challenge" (both solve.mit.edu/challenges/...) were collapsed as
+// duplicates, so the second one was silently dropped.
+function sameHostDifferentProgram(a, b) {
+  const da = urlDomain(a.url), db = urlDomain(b.url);
+  if (!da || da !== db || isAggregatorDomain(da)) return false;
+  const pa = programPathKey(a.url), pb = programPathKey(b.url);
+  if (!pa || !pb || pa === pb) return false;
+  const acA = extractAcronyms(a.title || ''), acB = extractAcronyms(b.title || '');
+  if (acA.some(ac => acB.includes(ac))) return false;
+  const wa = new Set(titleWords(a.title || '').concat(pa.split(/[\/-]/).filter(w => w.length >= 4 && !TITLE_STOP.has(w))));
+  const wb = new Set(titleWords(b.title || '').concat(pb.split(/[\/-]/).filter(w => w.length >= 4 && !TITLE_STOP.has(w))));
+  const shared = [...wa].filter(w => wb.has(w)).length;
+  const union = new Set([...wa, ...wb]).size;
+  return !(union && shared / union >= 0.5);
+}
+
 function grantsMatch(a, b) {
   const ua = cleanUrl(a.url), ub = cleanUrl(b.url);
-  if (ua && ub && ua === ub) return true;
+  // Identical LinkedIn page urls say nothing about the grant (see above).
+  if (ua && ub && ua === ub && !/^([\w-]+\.)*linkedin\.com(\/|$)/.test(ua)) return true;
+  if (sameHostDifferentProgram(a, b)) return false;
 
   const da = urlDomain(a.url), db = urlDomain(b.url);
-  if (da && db && da === db && da.length > 0 && !AGGREGATOR_DOMAINS.has(da)) {
+  if (da && db && da === db && da.length > 0 && !isAggregatorDomain(da)) {
     // Same funder site — but different annual rounds (different years) are different grants
     const yearA = extractYear(a.title), yearB = extractYear(b.title);
     if (yearA && yearB && yearA !== yearB) return false;
@@ -144,11 +191,14 @@ function grantsMatch(a, b) {
 // For aggregator-sourced grants (no stable domain), falls back to title words.
 function grantFingerprint(grant) {
   const domain = urlDomain(grant.url || '');
-  const isAgg  = !domain || AGGREGATOR_DOMAINS.has(domain);
+  const isAgg  = !domain || isAggregatorDomain(domain);
   const year   = extractYear(grant.title || '') || '';
 
   if (!isAgg) {
     // Same funder site + same year = same grant (small funders have 1 active round/year)
+    // NOTE: this format is the persisted Notion identity key — do NOT change it
+    // (CLAUDE.md, "Duplicate-of-already-researched filter"). Hosts with many
+    // programs are told apart by grantsMatch()/isKnown() via sameHostDifferentProgram().
     return `${domain}||${year}`;
   }
 
@@ -163,6 +213,6 @@ function grantFingerprint(grant) {
 
 module.exports = {
   cleanUrl, urlDomain, extractYear, extractAcronyms,
-  titleWords, grantsMatch, grantFingerprint,
-  AGGREGATOR_DOMAINS, GENERIC_ACRONYMS, TITLE_STOP,
+  titleWords, grantsMatch, grantFingerprint, sameHostDifferentProgram, programPathKey,
+  AGGREGATOR_DOMAINS, isAggregatorDomain, GENERIC_ACRONYMS, TITLE_STOP,
 };

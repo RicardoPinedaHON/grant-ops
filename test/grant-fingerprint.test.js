@@ -112,3 +112,30 @@ test('grantsMatch: an acronym-only title vs its fully-spelled-out name is a KNOW
   const b = { title: 'Global Environment Facility - Small Grants Program - CSO Challenge Program', url: 'https://csochallenge.org/#apply' };
   assert.equal(grantsMatch(a, b), false);
 });
+
+test('REGRESSION: two different challenges on solve.mit.edu are NOT duplicates (2027 Health vs Economic Prosperity)', () => {
+  const health = { title: '2027 Global Health Challenge', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge' };
+  const econ = { title: '2027 Global Economic Prosperity Challenge', url: 'https://solve.mit.edu/challenges/2027-global-economic-prosperity-challenge' };
+  const untitled = { title: 'https://lnkd.in/d82dHDER', url: 'https://solve.mit.edu/challenges/2027-global-economic-prosperity-challenge' };
+  assert.equal(grantsMatch(health, econ), false);
+  assert.equal(grantsMatch(health, untitled), false);
+  // The fingerprint stays host+year on purpose (persisted Notion identity key,
+  // see CLAUDE.md) — grantsMatch()/isKnown()/exactMatchFor() are the guards.
+  assert.equal(grantFingerprint(health), grantFingerprint(econ));
+});
+
+test('grantsMatch: same deep program path with a different title is still the same grant', () => {
+  const a = { title: '2027 Global Health Challenge', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge' };
+  const b = { title: 'Solve Global Health Challenge 2027 — Apply', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge/' };
+  assert.equal(grantsMatch(a, b), true);
+});
+
+test('isKnown: an old host+year fingerprint alias does not swallow a different program on the same host', () => {
+  const { isKnown } = require('../src/tracker/index');
+  const history = {
+    wp_x: { title: '2027 Global Health Challenge', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge' },
+    'fp:solve.mit.edu||2027': { grant_id: 'wp_x', title: '2027 Global Health Challenge' },
+  };
+  const econ = { id: 'li_1', title: '2027 Global Economic Prosperity Challenge', url: 'https://solve.mit.edu/challenges/2027-global-economic-prosperity-challenge' };
+  assert.equal(isKnown(econ, history), false);
+});

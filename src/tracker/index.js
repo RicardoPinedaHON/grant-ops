@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { buildHTML } = require('./html-report');
-const { grantFingerprint } = require('../utils/grant-fingerprint');
+const { grantFingerprint, sameHostDifferentProgram } = require('../utils/grant-fingerprint');
 
 const OUTPUT_DIR = path.join(process.cwd(), 'output');
 const TSV_FILE = path.join(OUTPUT_DIR, 'grants.tsv');
@@ -88,7 +88,15 @@ function isKnown(grant, history) {
   if (history[grant.id]) return true;
   // Also check by fingerprint — catches same grant with different ID across sources/runs
   const fp = grantFingerprint(grant);
-  return fp.length > 3 && !!history[`fp:${fp}`];
+  if (fp.length <= 3) return false;
+  const alias = history[`fp:${fp}`];
+  if (!alias) return false;
+  // Fingerprints written before program-path keys existed collapse every
+  // program on one host (solve.mit.edu||2027). Re-check against the grant the
+  // alias points at so a different program on the same host isn't dropped.
+  const prior = alias.grant_id && history[alias.grant_id];
+  if (prior && prior.url && sameHostDifferentProgram(grant, { title: prior.title, url: prior.url })) return false;
+  return true;
 }
 
 function markSeen(grant, history) {
