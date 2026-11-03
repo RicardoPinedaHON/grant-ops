@@ -523,6 +523,40 @@ only for pairs confirmed distinct. Numbered roundups may start "1. $7,800 – Na
 the list-number lookahead accepts $/€/£. Segment titles also drop a bare
 "$7,800 –" prefix and blurbs that open without a lead word ("Free professional
 support…", "Monthly microgrants…").
+**Embedding prototype (2026-11-03, read-only, NOT wired into scan/notion-sync)** —
+`src/utils/embedding-match.js` proposes "possible repeat" pairs using the embedding
+server Hugo already runs (llama.cpp + embeddinggemma, 127.0.0.1:18081, `EMBED_URL` to
+override). Title similarity alone cannot decide (same-grant pairs 0.71-0.90, different
+programs 0.74-0.91: Youth Climate Fund/Prize, Global Health/Economic Challenge, 2025/2026
+rounds), so a pair is proposed only if the rules did not match it, no veto applies (year,
+`PROGRAM_VARIANT_TOKENS`, same-host different program) AND a second signal agrees (same
+funder site, one title contains the other, a shared program marker, or vectors >= 0.95).
+Server down -> `null`, callers keep the rule-based `grantsMatch()` alone. Tools:
+`node scripts/audit-embedding-candidates.js` (Notion pages vs each other; also lists titles
+with line-separator/mojibake junk) and `node scripts/audit-linkedin-repeats.js --embeddings`.
+First run over 461 pages: 9 pairs proposed, all real or very likely repeats; it misses
+cross-language pairs with no second signal (Zayed Sustainability Prize / Premio Zayed).
+`variantTokens()` reads title AND url: the Notion page "Allianz Social Shifters 2026" is
+MoveNow only by its url. A title only counts as evidence when it is *distinctive*
+(2+ `identityWords`, or one rare word): "Small Grants Program 2026" from two funders has
+vectors at 0.97, and "Fellowship Program 2027" sits inside every funder's longer title.
+`--write` saves `output/embedding_candidates.json` (advisory; always exits 0; writes
+nothing if Notion or the server is down). Hardening in `embedTexts`: 15 s per request,
+90 s total, NaN/empty/mixed-size vectors rejected, titles truncated to 300 chars, more than
+4000 items declines (all-pairs is O(n^2): 3000 titles = 23 s).
+
+**Corpus check, how to re-run it (2026-11-03)**: compare the previous `grantsMatch` against the
+current one over every title+url in history.json plus the Notion pages (686 distinct) and read
+both directions ("new-only" = possible new false merges; "old-only" = matches lost). It found,
+and the tests now pin: Relx (same host, same title, different url paths) lost by the
+same-host veto; UNICEF/MIT/GEF institution acronyms merging unrelated programs
+(`INSTITUTION_ACRONYMS`: a shared institution acronym needs real word overlap, a program
+acronym like YCJF still identifies a grant); all-caps headlines sharing "PARA"/"ONG" as
+"acronyms" (3+ all-caps words = a headline, "STEM K-12" is not); math-bold titles invisible to
+matching (`fold()` = NFKC); posts sharing one bit.ly merging; and fondosyconvocatorias.com.mx /
+onglink.org pages merging by "same site" (`SAME_SITE_PROVES_NOTHING`, used by `grantsMatch`
+only). **Never add a host to `AGGREGATOR_DOMAINS` just to stop merges**: that list also feeds
+`grantFingerprint()`, the persisted Notion/history key, and a test pins those keys.
 `startupnetworks.co.uk` is an aggregator domain (it re-lists other funders' grants).
 Image reading is skipped when the caption already carries deadlines/amounts/links
 (`captionNeedsImage()`): Startup Networks and HOST images only repeated the text.

@@ -5,6 +5,9 @@
  *
  *   node scripts/audit-linkedin-repeats.js                    all configured sources
  *   node scripts/audit-linkedin-repeats.js "Startup" "HOST"   only sources whose name contains one of these
+ *   node scripts/audit-linkedin-repeats.js --embeddings       also list NEW records that look like a Notion page
+ *                                                              or another new record (local embedding server;
+ *                                                              prototype, see src/utils/embedding-match.js)
  *
  * Fetches the live pages with an EMPTY history (so nothing is skipped as "seen"),
  * splits posts into grants exactly like scan.js does, then classifies each:
@@ -26,6 +29,7 @@ const { deduplicateGrants } = require('../src/scrapers/index');
 const { closeBrowser } = require('../src/scrapers/playwright-base');
 const { loadHistory, isKnown } = require('../src/tracker/index');
 const { grantsMatch } = require('../src/utils/grant-fingerprint');
+const { findCandidates, cleanTitle } = require('../src/utils/embedding-match');
 
 async function notionPages() {
   const { notionRequest } = require('../src/notion-client');
@@ -49,7 +53,9 @@ async function notionPages() {
 }
 
 async function main() {
-  const filters = process.argv.slice(2).map(s => s.toLowerCase());
+  const args = process.argv.slice(2);
+  const useEmbeddings = args.includes('--embeddings');
+  const filters = args.filter(a => !a.startsWith('--')).map(s => s.toLowerCase());
   const cfg = yaml.parse(fs.readFileSync(path.join(ROOT, 'config', 'sources.yaml'), 'utf8')).linkedin;
   const sources = (cfg.sources || []).filter(s => s.enabled !== false)
     .filter(s => !filters.length || filters.some(f => s.name.toLowerCase().includes(f)));
@@ -76,6 +82,19 @@ async function main() {
     const page = pages && pages.find(p => grantsMatch(row.g, { title: p.title, url: p.url }));
     if (page) { row.status = 'already in Notion'; row.of = `${page.title} [${page.tier || '?'}${page.scan ? ', scanned ' + page.scan : ''}]`; continue; }
     row.status = 'NEW';
+  }
+
+  if (useEmbeddings) {
+    const fresh = rows.filter(r => r.status === 'NEW').map(r => ({ ...r.g, title: cleanTitle(r.g.title) }));
+    const known = (pages || []).map(p => ({ ...p, title: cleanTitle(p.title) }));
+    const vsNotion = fresh.length && known.length ? await findCandidates(fresh, known) : [];
+    const vsEachOther = fresh.length > 1 ? await findCandidates(fresh) : [];
+    if (vsNotion === null || vsEachOther === null) console.log('\n(embedding server unreachable: http://127.0.0.1:18081)');
+    else {
+      console.log(`\nPossible repeats by embedding (rules did not match; review by hand): ${vsNotion.length + vsEachOther.length}`);
+      for (const f of vsNotion) console.log(`  ${f.score.toFixed(3)} [${f.why.join('; ')}] "${f.a.title.slice(0, 50)}" ~ Notion "${f.b.title.slice(0, 50)}"`);
+      for (const f of vsEachOther) console.log(`  ${f.score.toFixed(3)} [${f.why.join('; ')}] "${f.a.title.slice(0, 50)}" ~ new "${f.b.title.slice(0, 50)}"`);
+    }
   }
 
   const pad = (s, n) => String(s).slice(0, n).padEnd(n);

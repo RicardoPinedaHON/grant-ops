@@ -148,3 +148,13 @@ test('REGRESSION (Startup Networks, 2026-11-03): a roundup whose first item is "
   assert.deepEqual(seg.segments.map(s => deriveSegmentTitle(s.text)), [
     'Sellars Company Growth Grant', 'Irish Aid Grants 2027', 'Education Funding & Partnerships – Dubai Cares', 'National Fund for Women']);
 });
+
+test('REGRESSION (all-sources run 2026-11-03): "Fund" inside a name is not cut as a verb; math-bold titles are normalised', () => {
+  const wphf = "Women's Peace & Humanitarian Fund (WPHF) Call for Proposals For local civil society organisations supporting women's participation and leadership in climate security and climate justice initiatives. Haiti | $2.5k to $30k | Closes 26 October 2026";
+  assert.equal(deriveSegmentTitle(wphf), "Women's Peace & Humanitarian Fund (WPHF) Call for Proposals");
+  assert.equal(deriveSegmentTitle('Up to $5,000 – National Fund for Women Monthly microgrants supporting eligible US individuals with financial challenges and personal goals and more words to pass 100'), 'National Fund for Women');
+  const bold = String.fromCodePoint(0x1d40c, 0x1d408, 0x1d413) + ' ' + String.fromCodePoint(0x1d412, 0x1d428, 0x1d425, 0x1d42f, 0x1d41e) + ' Global Health Challenge 🔗 https://lnkd.in/x';
+  assert.equal(deriveSegmentTitle(bold), 'MIT Solve Global Health Challenge');
+  // "X Funds early-stage ventures" still cuts at the verb
+  assert.equal(deriveSegmentTitle('Acme Climate Accelerator Funds early-stage ventures building tools for coastal communities across Latin America and the Caribbean region'), 'Acme Climate Accelerator');
+});

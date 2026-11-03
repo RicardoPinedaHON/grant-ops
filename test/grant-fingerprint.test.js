@@ -186,3 +186,65 @@ test('REGRESSION (LinkedIn repeat audit): Social Shifters MoveNow is a different
   // the same MoveNow call spelled two ways still matches itself
   assert.equal(grantsMatch(movenow, { title: 'The Allianz x Social Shifters MoveNow Social Innovation Challenge 2026', url: 'https://opportunitydesk.org/y' }), true);
 });
+
+test('REGRESSION (corpus comparison 2026-11-03): same funder host + same title with different url paths is still one grant', () => {
+  const a = { title: 'Relx Environmental Challenge 2025', url: 'https://www.relx.com/corporate-responsibility/engaging-others/relx-group-environmental-challenge' };
+  const b = { title: 'RELX Environmental Challenge', url: 'http://www.relx.com/corporateresponsibility/environmental-challenge' };
+  assert.equal(grantsMatch(a, b), true);
+  // ...while different programs on one host stay apart
+  assert.equal(grantsMatch(
+    { title: 'Japanese Award for Most Innovative Development Project (MIDP)', url: 'https://www.gdn.int/gdac/2026/midp' },
+    { title: 'Japanese Award for Outstanding Research on Development (ORD)', url: 'https://www.gdn.int/gdac/2026/ord' }), false);
+});
+
+test('REGRESSION (all-sources run): the same grant written in math-bold and in plain letters is one grant', () => {
+  const bold = String.fromCodePoint(0x1d40c, 0x1d408, 0x1d413) + ' Solve Global Health Challenge';
+  const a = { title: bold, url: 'https://www.linkedin.com/company/thepossibilists/' };
+  assert.equal(grantsMatch(a, { ...a }), true);
+  assert.equal(grantsMatch(a, { title: 'MIT Solve Global Health Challenge', url: 'https://www.linkedin.com/company/other/' }), true);
+});
+
+test('REGRESSION (all-sources run): a shared institution acronym alone does not make two grants one', () => {
+  const femtech = { title: 'UNICEF Femtech Ventures', url: 'https://www.linkedin.com/company/thepossibilists/' };
+  assert.equal(grantsMatch(femtech, { title: 'UNICEF Venture Fund / UNICEF Office of Innovation', url: 'https://www.unicef.org/' }), false);
+  assert.equal(grantsMatch(femtech, { title: 'United Nations Children’s Fund (UNICEF)', url: 'https://www.unpartnerportal.org/api/x' }), false);
+  assert.equal(grantsMatch(femtech, { title: 'OPORTUNIDAD DE CONSULTORÍA - UNICEF BOLIVIA', url: 'https://lnkd.in/abc' }), false);
+  assert.equal(grantsMatch({ title: 'MIT Solve Global Health Challenge', url: 'https://x.org/1' }, { title: 'MIT Solve Global Challenge 2026 — Climate + Environmental Innovation', url: 'https://solve.mit.edu/challenges/c' }), false);
+  // the same grant still matches through real word overlap
+  assert.equal(grantsMatch(femtech, { title: 'UNICEF Femtech Ventures 2026', url: 'https://www.unicef.org/innovation/FemTechCall' }), true);
+  // a PROGRAM acronym (not an institution) still identifies the grant
+  assert.equal(grantsMatch({ title: 'Youth Climate Justice Fund (YCJF) 2026', url: 'https://ycjf.org/a' }, { title: 'Fondos de YCJF para jóvenes', url: 'https://gestionandote.org/b' }), true);
+});
+
+test('REGRESSION (all-sources run): all-caps Spanish headlines share no "acronyms"', () => {
+  assert.equal(grantsMatch(
+    { title: 'Edited 📢 CONVOCATORIA INTERNACIONAL PARA ONG Y ORGANIZACIONES COMUNITARIAS', url: 'https://lnkd.in/a' },
+    { title: '¡ÚLTIMO DÍA PARA APROVECHAR EL DESCUENTO!', url: 'https://lnkd.in/b' }), false);
+});
+
+test('REGRESSION (corpus comparison): a short all-caps name like "STEM K-12" keeps its acronym', () => {
+  assert.equal(grantsMatch({ title: 'STEM K-12', url: '' }, { title: 'NSF — STEM K-12', url: '' }), true);
+});
+
+test('REGRESSION (all-sources run): two different posts sharing one link shortener are not the same grant', () => {
+  const ad = { title: 'Perdón por el jumpscare Pero hay historias que ponen la piel de gallina', url: 'http://bit.ly/CursoVirtual2026?trk=x' };
+  const other = { title: 'Piedra, papel o tijera: dejar la sostenibilidad de tu organización al azar', url: 'https://bit.ly/CursoVirtual2026' };
+  assert.equal(grantsMatch(ad, other), false);
+  // an identical funder url still identifies the grant
+  assert.equal(grantsMatch({ title: 'A Name', url: 'https://funder.org/apply' }, { title: 'Another Name', url: 'https://funder.org/apply' }), true);
+});
+
+test('PERSISTED KEYS stay put: grantFingerprint() for hosts grantsMatch() distrusts is unchanged (it is the Notion/history identity key)', () => {
+  assert.equal(grantFingerprint({ title: 'Anything 2026', url: 'https://onglink.org/oportunidad_info/x' }), 'onglink.org||2026');
+  assert.equal(grantFingerprint({ title: 'Anything 2026', url: 'https://bit.ly/abc' }), 'bit.ly||2026');
+  assert.equal(grantFingerprint({ title: 'Anything 2026', url: 'https://fondosyconvocatorias.com.mx/convocatorias/' }), 'fondosyconvocatorias.com.mx||2026');
+  assert.equal(grantFingerprint({ title: 'Anything 2026', url: 'https://www.funder.org/apply' }), 'funder.org||2026');
+});
+
+test('REGRESSION (all-sources run): unrelated pages of a grant-news site are not one grant', () => {
+  const a = { title: 'Una organización puede tener experiencia, programas sólidos y reconocimiento', url: 'https://fondosyconvocatorias.com.mx/por-que-una-organizacion/' };
+  const b = { title: 'Cuántas de las oportunidades que encuentra una organización social ofrecen financiamiento', url: 'https://fondosyconvocatorias.com.mx/noticia/la-mitad/' };
+  const c = { title: 'Una buena propuesta empieza mucho antes de redactar una solicitud', url: 'https://fondosyconvocatorias.com.mx/taller/' };
+  assert.equal(grantsMatch(a, b), false);
+  assert.equal(grantsMatch(a, c), false);
+});
