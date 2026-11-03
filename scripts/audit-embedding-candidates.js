@@ -6,11 +6,15 @@
  * new matching rules). Uses the local embedding server (Hugo's llama.cpp,
  * 127.0.0.1:18081) plus the vetoes and second signals in src/utils/embedding-match.js.
  *
- *   node scripts/audit-embedding-candidates.js
+ *   node scripts/audit-embedding-candidates.js            print the pairs
+ *   node scripts/audit-embedding-candidates.js --write    also save output/embedding_candidates.json
+ *                                                          (advisory file for the pipeline; always exits 0,
+ *                                                          writes nothing when Notion or the server is unreachable)
  *
  * Also lists pages whose title carries scraper junk (line separators, mojibake).
  * Writes nothing: not Notion, not history.json, not output/.
  */
+const fs = require('fs');
 const path = require('path');
 process.chdir(path.resolve(__dirname, '..'));
 
@@ -41,12 +45,24 @@ async function main() {
   const pages = await notionPages();
   console.log(`${pages.length} Notion pages\n`);
 
-  const junk = pages.filter(p => cleanTitle(p.title) !== p.title.replace(/\s+/g, ' ').trim());
+  const junk = pages.filter(p => cleanTitle(p.title) !== p.title.normalize('NFKC').replace(/\s+/g, ' ').trim());
   console.log(`Titles with scraper junk: ${junk.length}`);
   for (const p of junk) console.log(`  ${JSON.stringify(p.title.slice(0, 70))}  ->  ${JSON.stringify(cleanTitle(p.title).slice(0, 70))}`);
 
   const found = await findCandidates(pages.map(p => ({ ...p, title: cleanTitle(p.title) })));
-  if (!found) { console.log('\nEmbedding server unreachable (http://127.0.0.1:18081). Nothing compared.'); return; }
+  if (!found) { console.log(`\nEmbedding server unreachable (${process.env.EMBED_URL || 'http://127.0.0.1:18081'}). Nothing compared.`); return; }
+
+  if (process.argv.includes('--write')) {
+    const file = path.join('output', 'embedding_candidates.json');
+    const slim = x => ({ id: x.id, title: x.title, url: x.url, tier: x.tier });
+    fs.writeFileSync(file, JSON.stringify({
+      generated_at: new Date().toISOString(),
+      pages: pages.length,
+      note: 'Advisory only: pairs the rules did not match. Nothing was merged or changed.',
+      candidates: found.map(f => ({ score: Number(f.score.toFixed(3)), why: f.why, a: slim(f.a), b: slim(f.b) })),
+    }, null, 2));
+    console.log(`Wrote ${file} (${found.length} candidates)`);
+  }
 
   console.log(`\nPossible repeats the rules do not catch: ${found.length}`);
   for (const f of found) {
@@ -57,4 +73,7 @@ async function main() {
   }
 }
 
-main().then(() => process.exit(0)).catch(err => { console.error(err); process.exit(1); });
+main().then(() => process.exit(0)).catch(err => {
+  console.error(`embedding audit skipped: ${err && err.message ? err.message : err}`);
+  process.exit(process.argv.includes('--write') ? 0 : 1);   // advisory step: never fail a pipeline run
+});

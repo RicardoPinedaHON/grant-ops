@@ -38,6 +38,18 @@ const AGGREGATOR_DOMAINS = new Set([
   'startupnetworks.co.uk',
 ]);
 
+// Hosts where "same domain" proves nothing about the grant, for grantsMatch() ONLY.
+// Deliberately NOT part of AGGREGATOR_DOMAINS: that list also feeds grantFingerprint(), the
+// persisted Notion/history identity key, and changing it would re-key existing grants.
+//  - link shorteners and form/file hosts: one short domain fronts thousands of unrelated pages
+//  - grant-news and listing sites (Fondos y Convocatorias posts opinion pieces and workshops;
+//    ONGLink lists dozens of unrelated programs): everything on them used to match everything
+const SAME_SITE_PROVES_NOTHING = new Set([
+  'bit.ly','tinyurl.com','t.co','buff.ly','ow.ly','cutt.ly','rb.gy','is.gd','goo.gl',
+  'docs.google.com','drive.google.com','forms.gle','forms.office.com',
+  'fondosyconvocatorias.com.mx','onglink.org',
+]);
+
 function isAggregatorDomain(domain) {
   return AGGREGATOR_DOMAINS.has(domain) || /(^|\.)linkedin\.com$/.test(domain || '');
 }
@@ -45,6 +57,20 @@ function isAggregatorDomain(domain) {
 const GENERIC_ACRONYMS = new Set([
   'SDG','SDGS','NGO','NGOS','CSO','CBO','UN','EU','US','USA','AI','ICT',
   'GHG','CO2','COP','HIV','AIDS','LGBTQ','CEO','CFO','CTO','PMO',
+  // Spanish: ordinary words and generic terms that all-caps headlines turn into "acronyms"
+  'ONG','ONGS','OSC','PARA','CON','DEL','LOS','LAS','UNA','POR','SUS','MAS','QUE',
+]);
+
+// Institutions that run MANY programs. Sharing "UNICEF" or "MIT" says nothing about
+// whether two titles are the same grant ("UNICEF Femtech Ventures" vs "UNICEF Venture
+// Fund" vs "UNICEF Bolivia consultancy"; two different MIT Solve challenges — all merged
+// by the shared-acronym rule, found 2026-11-03). A program acronym (YCJF, SGP) still
+// identifies a grant; these only count together with real word overlap.
+const INSTITUTION_ACRONYMS = new Set([
+  'UNICEF','UNDP','UNEP','UNFPA','UNESCO','UNHCR','UNIDO','UNOPS','UNCTAD','UNAIDS','UNODC','OCHA','OHCHR',
+  'FAO','WHO','WFP','IFAD','ILO','IOM','ITU','WIPO','OECD','OAS','OEA',
+  'USAID','FCDO','DFID','GIZ','AFD','SIDA','NORAD','JICA','KOICA','DANIDA','EIB','EBRD','IFC','IDB','CAF',
+  'GEF','GCF','IUCN','WWF','CEPF','IKI','MIT','NASA','NSF','NIH','USDA','NEA','NEH','EPA','UKRI','CIFF',
 ]);
 
 const TITLE_STOP = new Set([
@@ -86,18 +112,32 @@ function programPathKey(url) {
   return segs.join('/').toLowerCase().replace(/\b20\d{2}\b/g, '').replace(/-{2,}/g, '-').replace(/-\//g, '/').replace(/\/-/g, '/').replace(/-$/, '');
 }
 
+// Scraped titles sometimes use Unicode look-alikes ("𝐌𝐈𝐓 𝐒𝐨𝐥𝐯𝐞", fullwidth, ligatures) that
+// every \w / [a-z] test reads as nothing, so the same grant in two posts never matched.
+const fold = t => String(t || '').normalize('NFKC');
+
 function extractYear(title) {
   const m = (title || '').match(/\b(20\d{2})\b/);
   return m ? m[1] : null;
 }
 
 function extractAcronyms(title) {
-  return (title.match(/\b[A-Z]{3,}\b/g) || [])
+  const t = fold(title);
+  // A headline written in capitals ("CONVOCATORIA INTERNACIONAL PARA ONG") has no acronyms:
+  // every word looks like one.
+  // Only for real headlines (3+ capitalised words): "STEM K-12" is a short name, not shouting.
+  if (!/[a-z]/.test(t) && (t.match(/\b[A-Z]{3,}\b/g) || []).length >= 3) return [];
+  return (t.match(/\b[A-Z]{3,}\b/g) || [])
     .filter(ac => !GENERIC_ACRONYMS.has(ac));
 }
 
+// Acronyms that identify a program (not just an institution that has many).
+function programAcronyms(title) {
+  return extractAcronyms(title).filter(ac => !INSTITUTION_ACRONYMS.has(ac));
+}
+
 function titleWords(title) {
-  return (title || '')
+  return fold(title)
     .toLowerCase()
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .replace(/\b\d{4}\b/g, '')
@@ -117,8 +157,14 @@ function sameHostDifferentProgram(a, b) {
   if (!da || da !== db || isAggregatorDomain(da)) return false;
   const pa = programPathKey(a.url), pb = programPathKey(b.url);
   if (!pa || !pb || pa === pb) return false;
-  const acA = extractAcronyms(a.title || ''), acB = extractAcronyms(b.title || '');
+  const acA = programAcronyms(a.title || ''), acB = programAcronyms(b.title || '');
   if (acA.some(ac => acB.includes(ac))) return false;
+  // The titles alone already agree ("Relx Environmental Challenge 2025" vs "RELX
+  // Environmental Challenge", relx.com, different paths — a live-confirmed repeat):
+  // path words must not dilute that into "different program".
+  const tA = new Set(titleWords(a.title || '')), tB = new Set(titleWords(b.title || ''));
+  const tShared = [...tA].filter(w => tB.has(w)).length, tUnion = new Set([...tA, ...tB]).size;
+  if (tA.size >= 2 && tB.size >= 2 && tShared / tUnion >= 0.8) return false;
   const wa = new Set(titleWords(a.title || '').concat(pa.split(/[\/-]/).filter(w => w.length >= 4 && !TITLE_STOP.has(w))));
   const wb = new Set(titleWords(b.title || '').concat(pb.split(/[\/-]/).filter(w => w.length >= 4 && !TITLE_STOP.has(w))));
   const shared = [...wa].filter(w => wb.has(w)).length;
@@ -131,7 +177,7 @@ function sameHostDifferentProgram(a, b) {
 // differences defeat word-overlap matching (found by the LinkedIn repeat audit,
 // 2026-10-30). Short titles are excluded to avoid accidental collisions.
 function squashTitle(title) {
-  return (title || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  return fold(title).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .replace(/\b20\d{2}\b/g, '').replace(/^the\s+/, '').replace(/[^a-z0-9]+/g, '');
 }
 
@@ -190,15 +236,19 @@ function differentVariants(a, b) {
   return va.length !== vb.length || va.some(tok => !vb.includes(tok));
 }
 
+const UNINFORMATIVE_URL = /^(?:(?:[\w-]+\.)*linkedin\.com|(?:bit\.ly|tinyurl\.com|t\.co|buff\.ly|ow\.ly|cutt\.ly|rb\.gy|is\.gd|goo\.gl))(?:\/|$)/;
+
 function grantsMatch(a, b) {
   const ua = cleanUrl(a.url), ub = cleanUrl(b.url);
-  // Identical LinkedIn page urls say nothing about the grant (see above).
-  if (ua && ub && ua === ub && !/^([\w-]+\.)*linkedin\.com(\/|$)/.test(ua)) return true;
+  // Identical LinkedIn page urls say nothing about the grant (see above), and neither
+  // does one link shortener shared by several posts (every Funds4impact post carried
+  // bit.ly/CursoVirtual2026, a course ad, and all of them matched each other).
+  if (ua && ub && ua === ub && !UNINFORMATIVE_URL.test(ua)) return true;
   if (sameHostDifferentProgram(a, b)) return false;
   if (differentVariants(a, b)) return false;
 
   const da = urlDomain(a.url), db = urlDomain(b.url);
-  if (da && db && da === db && da.length > 0 && !isAggregatorDomain(da)) {
+  if (da && db && da === db && da.length > 0 && !isAggregatorDomain(da) && !SAME_SITE_PROVES_NOTHING.has(da)) {
     // Same funder site — but different annual rounds (different years) are different grants
     const yearA = extractYear(a.title), yearB = extractYear(b.title);
     if (yearA && yearB && yearA !== yearB) return false;
@@ -218,8 +268,8 @@ function grantsMatch(a, b) {
   const sqA = squashTitle(a.title), sqB = squashTitle(b.title);
   if (sqA.length >= 12 && sqA === sqB && yearsCompatible(a, b)) return true;
 
-  const acA = extractAcronyms(a.title || '');
-  const acB = extractAcronyms(b.title || '');
+  const acA = programAcronyms(a.title || '');
+  const acB = programAcronyms(b.title || '');
   const sharedAc = acA.filter(ac => acB.includes(ac));
   if (sharedAc.length > 0) {
     const yearA = extractYear(a.title), yearB = extractYear(b.title);
@@ -295,5 +345,5 @@ module.exports = {
   cleanUrl, urlDomain, extractYear, extractAcronyms,
   titleWords, grantsMatch, grantFingerprint, sameHostDifferentProgram, programPathKey,
   squashTitle, yearsCompatible, differentVariants, variantTokens,
-  AGGREGATOR_DOMAINS, isAggregatorDomain, GENERIC_ACRONYMS, TITLE_STOP,
+  AGGREGATOR_DOMAINS, isAggregatorDomain, GENERIC_ACRONYMS, TITLE_STOP, INSTITUTION_ACRONYMS, programAcronyms,
 };

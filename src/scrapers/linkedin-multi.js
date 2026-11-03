@@ -218,14 +218,17 @@ function deriveSegmentTitle(segText) {
   // Name ends where the link/👉 starts; descriptive blurbs are cut at the
   // first " For <audience>" / " Para ..." / " | " / ": " so a 3-line blurb
   // doesn't become the title. "Up to €100,000 – <Name>" keeps only <Name>.
-  let head = segText.split(/👉|🔗|https?:\/\//)[0].trim().replace(MONEY_PREFIX_PAT, '');
+  // NFKC: The Possibilists writes titles in mathematical bold ("𝐌𝐈𝐓 𝐒𝐨𝐥𝐯𝐞"), unreadable to matching.
+  let head = segText.normalize('NFKC').split(/👉|🔗|https?:\/\//)[0].trim().replace(MONEY_PREFIX_PAT, '');
   const descAt = head.search(DESCRIPTION_START_PAT);
   if (descAt > 8) head = head.slice(0, descAt);
   const blurbAt = head.search(BLURB_START_PAT);
   if (blurbAt > 8) head = head.slice(0, blurbAt);
   head = head.split(/\s[✅💰📅]/u)[0];
   if (head.length > 100) {
-    const cutAt = head.search(/\s(?:For|Para|Dirigido|Open to|Supports?|Funds?|Empowers?)\s|\s\|\s|:\s/);
+    // "Funds" cuts only as a verb ("X Funds early-stage ventures"), never inside a name
+    // ("Women's Peace & Humanitarian Fund (WPHF)", "National Fund for Women").
+    const cutAt = head.search(/\s(?:For|Para|Dirigido|Open to|Supports?|Empowers?)\s|\sFunds?\s+(?!for\b|of\b|and\b|the\b|in\b|to\b|&|\()|\s\|\s|:\s/);
     if (cutAt > 5) head = head.slice(0, cutAt);
   }
   head = head.slice(0, 120).replace(/[\s\-–—:|,;]+$/u, '').trim();
