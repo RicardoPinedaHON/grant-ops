@@ -178,13 +178,15 @@ function yearsCompatible(a, b) {
 // separate applications. Add entries only for pairs confirmed to be distinct.
 const PROGRAM_VARIANT_TOKENS = ['movenow'];
 
-function variantTokens(title) {
-  const t = squashTitle(title);
+// Title AND url: the Notion page "Allianz Social Shifters 2026" is the MoveNow
+// call only by its url (leadersoftoday.com/.../allianz-movenow-...-2026).
+function variantTokens(grant) {
+  const t = squashTitle(grant.title) + cleanUrl(grant.url).replace(/[^a-z0-9]/g, '');
   return PROGRAM_VARIANT_TOKENS.filter(tok => t.includes(tok));
 }
 
 function differentVariants(a, b) {
-  const va = variantTokens(a.title), vb = variantTokens(b.title);
+  const va = variantTokens(a), vb = variantTokens(b);
   return va.length !== vb.length || va.some(tok => !vb.includes(tok));
 }
 
@@ -292,5 +294,6 @@ function grantFingerprint(grant) {
 module.exports = {
   cleanUrl, urlDomain, extractYear, extractAcronyms,
   titleWords, grantsMatch, grantFingerprint, sameHostDifferentProgram, programPathKey,
+  squashTitle, yearsCompatible, differentVariants, variantTokens,
   AGGREGATOR_DOMAINS, isAggregatorDomain, GENERIC_ACRONYMS, TITLE_STOP,
 };

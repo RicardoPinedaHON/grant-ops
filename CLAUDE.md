@@ -523,6 +523,21 @@ only for pairs confirmed distinct. Numbered roundups may start "1. $7,800 – Na
 the list-number lookahead accepts $/€/£. Segment titles also drop a bare
 "$7,800 –" prefix and blurbs that open without a lead word ("Free professional
 support…", "Monthly microgrants…").
+**Embedding prototype (2026-11-03, read-only, NOT wired into scan/notion-sync)** —
+`src/utils/embedding-match.js` proposes "possible repeat" pairs using the embedding
+server Hugo already runs (llama.cpp + embeddinggemma, 127.0.0.1:18081, `EMBED_URL` to
+override). Title similarity alone cannot decide (same-grant pairs 0.71-0.90, different
+programs 0.74-0.91: Youth Climate Fund/Prize, Global Health/Economic Challenge, 2025/2026
+rounds), so a pair is proposed only if the rules did not match it, no veto applies (year,
+`PROGRAM_VARIANT_TOKENS`, same-host different program) AND a second signal agrees (same
+funder site, one title contains the other, a shared program marker, or vectors >= 0.95).
+Server down -> `null`, callers keep the rule-based `grantsMatch()` alone. Tools:
+`node scripts/audit-embedding-candidates.js` (Notion pages vs each other; also lists titles
+with line-separator/mojibake junk) and `node scripts/audit-linkedin-repeats.js --embeddings`.
+First run over 461 pages: 9 pairs proposed, all real or very likely repeats; it misses
+cross-language pairs with no second signal (Zayed Sustainability Prize / Premio Zayed).
+`variantTokens()` reads title AND url: the Notion page "Allianz Social Shifters 2026" is
+MoveNow only by its url.
 `startupnetworks.co.uk` is an aggregator domain (it re-lists other funders' grants).
 Image reading is skipped when the caption already carries deadlines/amounts/links
 (`captionNeedsImage()`): Startup Networks and HOST images only repeated the text.
