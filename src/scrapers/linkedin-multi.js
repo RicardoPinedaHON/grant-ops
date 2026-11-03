@@ -140,7 +140,7 @@ const STRICT_KINDS = new Set(['bullet', 'right-arrow-emoji']);
 // "1. Name 2. Name 3. Name" / "1) Name ..." — only accepted for a strictly
 // consecutive 1..N sequence, so amounts/dates ("2. 5 dic") never qualify.
 function findNumberedMarkers(text) {
-  const re = /(?:^|\s)(\d{1,2})[.)]\s+(?=[A-ZÁÉÍÓÚÑ0-9])/g;
+  const re = /(?:^|\s)(\d{1,2})[.)]\s+(?=[A-ZÁÉÍÓÚÑ0-9$€£])/g;
   const hits = [];
   let m;
   while ((m = re.exec(text))) hits.push({ n: parseInt(m[1], 10), start: m.index + (m[0].length - m[0].trimStart().length), end: m.index + m[0].length });
@@ -210,7 +210,9 @@ function segmentPostText(text) {
 
 const DESCRIPTION_START_PAT =
   /\s(?:Cash prizes|Prizes|Grants|Grant funding|Funding|Fellowships|Support|Awards|Financiaci[oó]n|Apoyo)\s+(?:for|to|supporting|recognising|recognizing|helping|that|available|para|que)\b/;
-const MONEY_PREFIX_PAT = /^(?:Up to|Hasta|Prizes? up to|From|Desde)\s+(?:[$€£]|USD|EUR|GBP)\s?[\d.,]+\s?[kKmM]?\s*[–—-]\s+/;
+const MONEY_PREFIX_PAT = /^(?:(?:Up to|Hasta|Prizes? up to|From|Desde)\s+)?(?:[$€£]|USD|EUR|GBP)\s?[\d.,]+\s?[kKmM]?\s*[–—-]\s+/;
+// Blurbs that open without a lead word ("Sellars Company Growth Grant Free professional support…").
+const BLURB_START_PAT = /\s(?:Free\s+(?:[a-z]+\s+)?(?:support|training|mentoring|mentorship|services)|Partnership opportunities|Monthly\s+micro-?grants|Opportunities\s+(?:for|to))\b/;
 
 function deriveSegmentTitle(segText) {
   // Name ends where the link/👉 starts; descriptive blurbs are cut at the
@@ -219,6 +221,9 @@ function deriveSegmentTitle(segText) {
   let head = segText.split(/👉|🔗|https?:\/\//)[0].trim().replace(MONEY_PREFIX_PAT, '');
   const descAt = head.search(DESCRIPTION_START_PAT);
   if (descAt > 8) head = head.slice(0, descAt);
+  const blurbAt = head.search(BLURB_START_PAT);
+  if (blurbAt > 8) head = head.slice(0, blurbAt);
+  head = head.split(/\s[✅💰📅]/u)[0];
   if (head.length > 100) {
     const cutAt = head.search(/\s(?:For|Para|Dirigido|Open to|Supports?|Funds?|Empowers?)\s|\s\|\s|:\s/);
     if (cutAt > 5) head = head.slice(0, cutAt);

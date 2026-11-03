@@ -514,9 +514,15 @@ spacing-insensitive title rule ("GirlUp" = "Girl Up") and a small acronym table
 the title must agree) — both found by `scripts/audit-linkedin-repeats.js`, a
 read-only tool that fetches the live pages with an empty history and says which
 extracted grants are repeats in-run, known in history, already in Notion, or new.
-Run it after adding a source or changing matching. Known borderline, NOT changed:
-two programs of one funder sharing 3 of 4 title words (Social Shifters "MoveNow
-Social Innovation Challenge" vs "Global Innovation Challenge 2026") match and merge.
+Run it after adding a source or changing matching. Sibling programs of one funder
+that differ by one word are kept apart through `PROGRAM_VARIANT_TOKENS` in
+grant-fingerprint.js (`movenow`: Social Shifters "MoveNow Social Innovation
+Challenge", up to $90k, closes Dec 18, is a separate call from "Global Innovation
+Challenge 2026", up to $15k, closes Aug 31 — web-checked 2026-11-03). Add tokens
+only for pairs confirmed distinct. Numbered roundups may start "1. $7,800 – Name":
+the list-number lookahead accepts $/€/£. Segment titles also drop a bare
+"$7,800 –" prefix and blurbs that open without a lead word ("Free professional
+support…", "Monthly microgrants…").
 `startupnetworks.co.uk` is an aggregator domain (it re-lists other funders' grants).
 Image reading is skipped when the caption already carries deadlines/amounts/links
 (`captionNeedsImage()`): Startup Networks and HOST images only repeated the text.

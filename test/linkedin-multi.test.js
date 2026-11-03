@@ -135,3 +135,16 @@ test('a single-grant post full of ✅/🔹/✔️ feature bullets is NOT split (
   assert.equal(segmentPostText(STARTUP_SINGLE), null);
   assert.equal(splitPostIntoRecords({ ...fx.tarbell_single, post_text: STARTUP_SINGLE, external_urls: [] }).length, 1);
 });
+
+test('REGRESSION (Startup Networks, 2026-11-03): a roundup whose first item is "1. $7,800 – Name" is split by its numbering, not by the ✅ bullets', () => {
+  const text = '🚨 Up to €180,000, $7,800 in Business Support! We\'ve rounded up 4 opportunities worth exploring this November! 👇 ' +
+    '🚀 1. $7,800 – Sellars Company Growth Grant Free professional support for US small businesses. ✅ US-registered small businesses ✅ 12 months of contracting guidance 💰 $7,800 in services 📅 Deadline: 20 November 2026 🔗 https://lnkd.in/aaa ' +
+    '🌍 2. Up to €180,000 – Irish Aid Grants 2027 Funding for global citizenship education. ✅ Irish-based charities ✅ Schools 💰 €10,000–€180,000 📅 Final application: 9 December 2026 🔗 https://lnkd.in/bbb ' +
+    '🎓 3. Education Funding & Partnerships – Dubai Cares Partnership opportunities for education. ✅ Registered NGOs ✅ Projects supporting children 💰 Funding varies 📅 No fixed deadline 🔗 https://lnkd.in/ccc ' +
+    '💜 4. Up to $5,000 – National Fund for Women Monthly microgrants for US individuals. ✅ US citizens aged 18+ ✅ Membership required ($15 annually) 💰 $100–$5,000 📅 Monthly deadline: 22nd 🔗 https://lnkd.in/ddd';
+  const seg = segmentPostText(text);
+  assert.equal(seg.kind, 'numbered');
+  assert.equal(seg.segments.length, 4);
+  assert.deepEqual(seg.segments.map(s => deriveSegmentTitle(s.text)), [
+    'Sellars Company Growth Grant', 'Irish Aid Grants 2027', 'Education Funding & Partnerships – Dubai Cares', 'National Fund for Women']);
+});

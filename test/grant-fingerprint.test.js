@@ -178,3 +178,11 @@ test('findKnown says WHAT a skipped grant repeats (id match, fingerprint match, 
   assert.equal(byFp.title, 'GirlUp Project Awards');
   assert.equal(findKnown({ id: 'li_z', title: 'Totally Different Prize', url: 'https://www.linkedin.com/company/x/' }, history), null);
 });
+
+test('REGRESSION (LinkedIn repeat audit): Social Shifters MoveNow is a different program from the Global Innovation Challenge', () => {
+  const movenow = { title: 'Social Shifters MoveNow Social Innovation Challenge', url: 'https://www.linkedin.com/company/startup-networks/' };
+  const global = { title: 'Social Shifters Global Innovation Challenge 2026', url: 'https://app.easygrant.io/x/1' };
+  assert.equal(grantsMatch(movenow, global), false);
+  // the same MoveNow call spelled two ways still matches itself
+  assert.equal(grantsMatch(movenow, { title: 'The Allianz x Social Shifters MoveNow Social Innovation Challenge 2026', url: 'https://opportunitydesk.org/y' }), true);
+});

@@ -170,11 +170,30 @@ function yearsCompatible(a, b) {
   return !(yearA && yearB && yearA !== yearB);
 }
 
+// Sibling programs of one funder whose titles differ by a single distinctive
+// word, which word-overlap matching reads as the same grant. Confirmed
+// 2026-11-03 (web check): Social Shifters "Global Innovation Challenge" (up to
+// $15k, closes Aug 31) and the Allianz x Social Shifters "MoveNow Social
+// Innovation Challenge" (up to $90k, closes Dec 18) are separate calls with
+// separate applications. Add entries only for pairs confirmed to be distinct.
+const PROGRAM_VARIANT_TOKENS = ['movenow'];
+
+function variantTokens(title) {
+  const t = squashTitle(title);
+  return PROGRAM_VARIANT_TOKENS.filter(tok => t.includes(tok));
+}
+
+function differentVariants(a, b) {
+  const va = variantTokens(a.title), vb = variantTokens(b.title);
+  return va.length !== vb.length || va.some(tok => !vb.includes(tok));
+}
+
 function grantsMatch(a, b) {
   const ua = cleanUrl(a.url), ub = cleanUrl(b.url);
   // Identical LinkedIn page urls say nothing about the grant (see above).
   if (ua && ub && ua === ub && !/^([\w-]+\.)*linkedin\.com(\/|$)/.test(ua)) return true;
   if (sameHostDifferentProgram(a, b)) return false;
+  if (differentVariants(a, b)) return false;
 
   const da = urlDomain(a.url), db = urlDomain(b.url);
   if (da && db && da === db && da.length > 0 && !isAggregatorDomain(da)) {
