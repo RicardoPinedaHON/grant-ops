@@ -36,6 +36,11 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const { isPostSeen, markPostSeen } = require('../tracker/index');
+const fs = require('fs');
+const path = require('path');
+const {
+  classifyLinks, segmentPostText, deriveSegmentTitle, assignLinksToSegments,
+} = require('./linkedin-multi');
 
 const JINA_BASE = 'https://r.jina.ai/';
 const DEFAULT_REQUEST_DELAY_MS = 3000;
@@ -562,7 +567,22 @@ function parseAmountNumber(str) {
 
 const CURRENCY_TOKEN = '(?:AU\\$|A\\$|US\\$|USD|EUR|€|£|GBP|\\$)';
 
-function extractAmountRange(text) {
+// "$2.5k" / "USD 150K" / "€1.2M" -> plain integers, so parseAmountNumber()
+// doesn't read "2.5" as 25. Only expands when a currency token precedes the
+// number, so "5 m" (meters/months) and similar are left alone.
+function expandMagnitudes(text) {
+  return (text || '').replace(
+    new RegExp(`(${CURRENCY_TOKEN})\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*([kKmM])\\b`, 'g'),
+    (_, cur, num, suffix) => {
+      const n = parseFloat(num.replace(',', '.'));
+      const mult = suffix.toLowerCase() === 'k' ? 1e3 : 1e6;
+      return `${cur}${Math.round(n * mult)}`;
+    }
+  );
+}
+
+function extractAmountRange(rawText) {
+  const text = expandMagnitudes(rawText);
   // "Entre USD 10.000 y USD 900.000" / "Between $10,000 and $900,000"
   const rangeRe = new RegExp(`(?:entre|between)\\s+(${CURRENCY_TOKEN})\\s*([\\d.,]+)\\s+(?:y|and)\\s+(${CURRENCY_TOKEN})?\\s*([\\d.,]+)`, 'i');
   let m = text.match(rangeRe);
@@ -693,7 +713,7 @@ function postToGrantRecord(post) {
   // LinkedIn post itself, per spec. Fall back to the post's own permalink
   // (when LinkedIn's render happened to expose one) before the generic
   // company page URL.
-  const preferredExternal = post.external_urls.find(u => !/^mailto:/i.test(u.original_url));
+  const preferredExternal = post.external_urls.find(u => !u.junk && !/^mailto:/i.test(u.original_url));
   const url = (preferredExternal && (preferredExternal.resolved_url || preferredExternal.original_url)) ||
     post.raw_metadata.post_url || post.source_url;
 
@@ -750,7 +770,7 @@ function isMultiOpportunityPost(post) {
   if (!MULTI_OPPORTUNITY_PAT.test(post.post_text || '')) return false;
   const distinctLinks = new Set(
     (post.external_urls || [])
-      .filter(u => !/^mailto:/i.test(u.original_url))
+      .filter(u => !u.junk && !/^mailto:/i.test(u.original_url))
       .map(u => u.resolved_url || u.original_url)
   );
   return distinctLinks.size > 1;
@@ -767,7 +787,7 @@ function splitMultiOpportunityPost(post) {
   const base = postToGrantRecord(post);
   const seen = new Set();
   const links = (post.external_urls || []).filter(u => {
-    if (/^mailto:/i.test(u.original_url)) return false;
+    if (u.junk || /^mailto:/i.test(u.original_url)) return false;
     const key = u.resolved_url || u.original_url;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -793,11 +813,105 @@ function splitMultiOpportunityPost(post) {
   });
 }
 
+// Single entry point for turning one post into 1..N grant records.
+//   1. text-list posts ("1️⃣ ... 2️⃣ ...", "➜ ... ➜ ...") -> one record per
+//      listed grant, with amount/deadline taken from THAT grant's own lines
+//      and only its own links attached (this is what HOST's 3-grant post and
+//      Innpactia's 5-grant post need — the old path kept 1 and 4-of-5).
+//   2. several distinct genuine links + a "N fondos" claim -> one per link.
+//   3. otherwise -> one record (first genuine link wins over sign-up links).
+// Sign-up / newsletter / own-site / login links are flagged `junk` first so
+// they never become records or the record's url.
+function splitPostIntoRecords(post) {
+  const classified = classifyLinks(post);
+  const flagged = { ...post, external_urls: classified };
+
+  const seg = segmentPostText(post.post_text);
+  if (seg) {
+    const { perSegment } = assignLinksToSegments(post.post_text, seg.segments, classified);
+    const context = seg.header ? seg.header.slice(0, 200) : '';
+    return seg.segments.map((segment, i) => {
+      const virtual = {
+        ...flagged,
+        post_text: segment.text,
+        external_urls: perSegment[i],
+        mentioned_organizations: extractMentionedOrganizations(segment.text),
+      };
+      const base = postToGrantRecord(virtual);
+      const title = deriveSegmentTitle(segment.text) || base.title;
+      const description = context ? `${segment.text}\n\n[Contexto del post: ${context}]` : segment.text;
+      return {
+        ...base,
+        id: `li_${post.fingerprint.slice(0, 24)}_${i}`,
+        title,
+        opportunity_name: title,
+        description,
+        summary: description,
+        _from_linkedin_multi: post.fingerprint,
+        _segment_kind: seg.kind,
+        _segment_index: i,
+        _linkedin: post,
+      };
+    }).map(markFallbackUrl);
+  }
+
+  const records = isMultiOpportunityPost(flagged)
+    ? splitMultiOpportunityPost(flagged)
+    : [postToGrantRecord(flagged)];
+  return records.map(markFallbackUrl);
+}
+
+// A record whose url is still a LinkedIn page (no funder link in the post) has
+// no funder page of its own — flagged so near-miss doesn't "re-judge" it against
+// LinkedIn's login wall and so a reviewer knows the url is the poster's, not the funder's.
+function markFallbackUrl(record) {
+  return /(^|\.)linkedin\.com$/.test(hostFromUrl(record.url)) ? { ...record, _url_is_fallback: true } : record;
+}
+
+function hostFromUrl(url) {
+  try { return new URL(url).hostname; } catch { return ''; }
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Orchestration — fetchLinkedInSources(config, history)
 // ─────────────────────────────────────────────────────────────────────────
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+const IMAGE_PENDING_FILE = () => path.join(process.cwd(), 'output', 'linkedin_images_pending.json');
+
+function writePendingImages(list) {
+  fs.mkdirSync(path.dirname(IMAGE_PENDING_FILE()), { recursive: true });
+  fs.writeFileSync(IMAGE_PENDING_FILE(), JSON.stringify(list, null, 2));
+}
+
+// Read a post's images only when the caption alone is not enough:
+//   - the caption is short (flyer-style: "mira la imagen", "convocatorias de la semana"), or
+//   - it looks like an opportunity but yields nothing usable: no deadline, no
+//     amount and no funder link in any of its records.
+// Captions that already carry deadlines/amounts/links (Startup Networks, HOST
+// bulletins) skip the images — their pictures only repeat the text or are banners.
+function captionNeedsImage(post) {
+  const caption = post.post_text || '';
+  if (caption.length < 500) return true;
+  if (!isLikelyOpportunityPost(caption)) return false;
+  const records = splitPostIntoRecords(post);
+  return records.every(r => !r.deadline && !r.amount_max && r._url_is_fallback);
+}
+
+async function queuePostImages(post, cfg, imageIndex, hasRoom) {
+  if (!hasRoom || !imageIndex) return null;
+  const caption = post.post_text || '';
+  if (!captionNeedsImage(post)) return null;
+  const imgs = require('./linkedin-images');
+  const picked = await imageIndex.get();
+  const urls = imgs.matchPostToImages(post, picked);
+  if (!urls.length) return null;
+  const key = post.fingerprint.slice(0, 24);
+  const files = await imgs.downloadImages(urls, key);
+  if (!files.length) return null;
+  return { key, source_name: cfg.name, source_url: cfg.url, caption: caption.slice(0, 300), files, post };
+}
 
 /**
  * @param {object} linkedinConfig  config.linkedin from sources.yaml
@@ -824,6 +938,19 @@ async function fetchLinkedInSources(linkedinConfig, history) {
 
   const sources = (linkedinConfig.sources || []).filter(s => s.enabled !== false);
   metrics.sourcesConfigured = sources.length;
+
+  // Image prototype (config linkedin.images.enabled, off by default): posts that
+  // carry images are queued in output/linkedin_images_pending.json so a Claude
+  // step can read the flyer text before scoring (see src/linkedin-image-text.js).
+  const imagesCfg = linkedinConfig.images || {};
+  const imagesOn = imagesCfg.enabled === true;
+  const maxImagePosts = imagesCfg.max_posts_per_run ?? 6;
+  const imagePending = [];
+  if (imagesOn) {
+    const imgs = require('./linkedin-images');
+    try { imgs.cleanupImageDir(); } catch { /* nothing left from a previous run */ }
+    writePendingImages([]);
+  }
   const requestDelayMs = linkedinConfig.request_delay_ms ?? DEFAULT_REQUEST_DELAY_MS;
 
   for (let i = 0; i < sources.length; i++) {
@@ -838,6 +965,9 @@ async function fetchLinkedInSources(linkedinConfig, history) {
 
       const detectedAtIso = new Date().toISOString();
       const rawPosts = extractUpdates(markdown);
+      // One browser load per company page, only when something new might need it.
+      let imageIndex = null;
+      if (imagesOn) imageIndex = { get: async () => (imageIndex._v ??= await require('./linkedin-images').collectImagesForSource(cfg.url)) };
       metrics.postsFetched += rawPosts.length;
 
       for (const rawPost of rawPosts) {
@@ -858,16 +988,17 @@ async function fetchLinkedInSources(linkedinConfig, history) {
         }, history);
         metrics.newPosts++;
 
+        if (imagesOn && imagePending.length < maxImagePosts) {
+          const queued = await queuePostImages(post, cfg, imageIndex, imagePending.length < maxImagePosts);
+          if (queued) imagePending.push(queued);
+        }
+
         if (isLikelyOpportunityPost(post.post_text)) {
           metrics.opportunitiesDetected++;
           // Only resolve lnkd.in redirects for posts we actually keep —
           // keeps request volume low, per the "no agressive scraping" rule.
           post.external_urls = await resolveExternalLinks(post.external_urls);
-          if (isMultiOpportunityPost(post)) {
-            grants.push(...splitMultiOpportunityPost(post));
-          } else {
-            grants.push(postToGrantRecord(post));
-          }
+          grants.push(...splitPostIntoRecords(post));
         }
       }
 
@@ -879,6 +1010,12 @@ async function fetchLinkedInSources(linkedinConfig, history) {
       // Resilience: one failing source does not abort the others.
       continue;
     }
+  }
+
+  if (imagesOn) {
+    writePendingImages(imagePending);
+    metrics.imagePostsQueued = imagePending.length;
+    console.log(`  [LinkedIn] image posts queued for reading: ${imagePending.length}`);
   }
 
   console.log(
@@ -896,6 +1033,10 @@ module.exports = {
   deriveTitle,
   isMultiOpportunityPost,
   splitMultiOpportunityPost,
+  splitPostIntoRecords,
+  expandMagnitudes,
+  IMAGE_PENDING_FILE,
+  captionNeedsImage,
   resolveLnkdInUrl,
   normalizeText,
   normalizeForMatch,

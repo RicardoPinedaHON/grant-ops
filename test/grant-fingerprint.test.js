@@ -112,3 +112,77 @@ test('grantsMatch: an acronym-only title vs its fully-spelled-out name is a KNOW
   const b = { title: 'Global Environment Facility - Small Grants Program - CSO Challenge Program', url: 'https://csochallenge.org/#apply' };
   assert.equal(grantsMatch(a, b), false);
 });
+
+test('REGRESSION: two different challenges on solve.mit.edu are NOT duplicates (2027 Health vs Economic Prosperity)', () => {
+  const health = { title: '2027 Global Health Challenge', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge' };
+  const econ = { title: '2027 Global Economic Prosperity Challenge', url: 'https://solve.mit.edu/challenges/2027-global-economic-prosperity-challenge' };
+  const untitled = { title: 'https://lnkd.in/d82dHDER', url: 'https://solve.mit.edu/challenges/2027-global-economic-prosperity-challenge' };
+  assert.equal(grantsMatch(health, econ), false);
+  assert.equal(grantsMatch(health, untitled), false);
+  // The fingerprint stays host+year on purpose (persisted Notion identity key,
+  // see CLAUDE.md) — grantsMatch()/isKnown()/exactMatchFor() are the guards.
+  assert.equal(grantFingerprint(health), grantFingerprint(econ));
+});
+
+test('grantsMatch: same deep program path with a different title is still the same grant', () => {
+  const a = { title: '2027 Global Health Challenge', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge' };
+  const b = { title: 'Solve Global Health Challenge 2027 — Apply', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge/' };
+  assert.equal(grantsMatch(a, b), true);
+});
+
+test('isKnown: an old host+year fingerprint alias does not swallow a different program on the same host', () => {
+  const { isKnown } = require('../src/tracker/index');
+  const history = {
+    wp_x: { title: '2027 Global Health Challenge', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge' },
+    'fp:solve.mit.edu||2027': { grant_id: 'wp_x', title: '2027 Global Health Challenge' },
+  };
+  const econ = { id: 'li_1', title: '2027 Global Economic Prosperity Challenge', url: 'https://solve.mit.edu/challenges/2027-global-economic-prosperity-challenge' };
+  assert.equal(isKnown(econ, history), false);
+});
+
+test('REGRESSION (LinkedIn repeat audit): "GirlUp Project Awards" is the same grant as "Girl Up Project Awards 2026"', () => {
+  const a = { title: 'GirlUp Project Awards', url: 'https://www.linkedin.com/company/allyforaction/' };
+  const b = { title: 'Girl Up Project Awards 2026', url: 'https://girlup.org/project-awards' };
+  assert.equal(grantsMatch(a, b), true);
+  // a different year is a different round
+  assert.equal(grantsMatch({ title: 'Girl Up Project Awards 2025', url: 'https://x.org/a' }, { title: 'GirlUp Project Awards 2026', url: 'https://y.org/b' }), false);
+});
+
+test('REGRESSION (LinkedIn repeat audit): "UN Environment Programme Small Grants Programme" is "UNEP Small Grants Program 2026"', () => {
+  const a = { title: 'UN Environment Programme Small Grants Programme', url: 'https://www.linkedin.com/company/allyforaction/' };
+  const b = { title: 'UNEP Small Grants Program 2026', url: 'https://www.unep.org/small-grants' };
+  assert.equal(grantsMatch(a, b), true);
+});
+
+test('acronym expansion does not merge different programs of the same funder', () => {
+  const small = { title: 'United Nations Environment Programme Small Grants Programme', url: 'https://a.org/1' };
+  const fin = { title: 'UNEP Finance Initiative Membership', url: 'https://b.org/2' };
+  assert.equal(grantsMatch(small, fin), false);
+  assert.equal(grantsMatch({ title: 'Youth Climate Fund', url: 'https://a.org/1' }, { title: 'Youth Climate Prize', url: 'https://b.org/2' }), false);
+});
+
+test('short or merely similar titles are not squashed into a match', () => {
+  assert.equal(grantsMatch({ title: 'Green Fund', url: 'https://a.org/1' }, { title: 'GreenFund', url: 'https://b.org/2' }), false);
+});
+
+test('findKnown says WHAT a skipped grant repeats (id match, fingerprint match, or none)', () => {
+  const { findKnown } = require('../src/tracker/index');
+  const fp = grantFingerprint({ title: 'GirlUp Project Awards', url: 'https://www.linkedin.com/company/x/' });
+  const history = {
+    li_a: { title: 'GirlUp Project Awards', first_seen: '2026-10-20T10:00:00Z', url: 'https://girlup.org/awards' },
+    [`fp:${fp}`]: { grant_id: 'li_a', title: 'GirlUp Project Awards', first_seen: '2026-10-20T10:00:00Z' },
+  };
+  assert.equal(findKnown({ id: 'li_a', title: 'x', url: '' }, history).via, 'same id');
+  const byFp = findKnown({ id: 'li_new', title: 'GirlUp Project Awards', url: 'https://www.linkedin.com/company/x/' }, history);
+  assert.equal(byFp.via, 'same fingerprint');
+  assert.equal(byFp.title, 'GirlUp Project Awards');
+  assert.equal(findKnown({ id: 'li_z', title: 'Totally Different Prize', url: 'https://www.linkedin.com/company/x/' }, history), null);
+});
+
+test('REGRESSION (LinkedIn repeat audit): Social Shifters MoveNow is a different program from the Global Innovation Challenge', () => {
+  const movenow = { title: 'Social Shifters MoveNow Social Innovation Challenge', url: 'https://www.linkedin.com/company/startup-networks/' };
+  const global = { title: 'Social Shifters Global Innovation Challenge 2026', url: 'https://app.easygrant.io/x/1' };
+  assert.equal(grantsMatch(movenow, global), false);
+  // the same MoveNow call spelled two ways still matches itself
+  assert.equal(grantsMatch(movenow, { title: 'The Allianz x Social Shifters MoveNow Social Innovation Challenge 2026', url: 'https://opportunitydesk.org/y' }), true);
+});

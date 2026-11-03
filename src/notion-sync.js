@@ -11,7 +11,7 @@
 const https = require('https');
 const fs    = require('fs');
 const path  = require('path');
-const { grantFingerprint, grantsMatch } = require('./utils/grant-fingerprint');
+const { grantFingerprint, grantsMatch, sameHostDifferentProgram } = require('./utils/grant-fingerprint');
 const { isResearchStale, formatDeadlineNote, computeDeadlineFields } = require('./notion-client');
 const { INELIGIBLE_FLAGS } = require('./scorer/index');
 
@@ -187,6 +187,14 @@ async function getExistingPages() {
 // dozen new grants per run against a few hundred existing pages).
 function findFuzzyMatch(grant, allPages) {
   return allPages.find(p => p.pageId && grantsMatch(grant, { title: p.title, url: p.url }));
+}
+
+// The Fingerprint key is host+year, so a DIFFERENT program on the same funder
+// host (solve.mit.edu/challenges/<other>) resolves to the old page and would
+// overwrite it. Drop the exact-key hit when the page is clearly another program.
+function exactMatchFor(grant, entry) {
+  if (!entry) return null;
+  return sameHostDifferentProgram(grant, { title: entry.title, url: entry.url }) ? null : entry;
 }
 
 function identityKeyFor(grant) {
@@ -570,14 +578,14 @@ async function syncToNotion(scoredGrants, researchCache) {
   await ensureSchema();
   const { pages: existing, allPages } = await getExistingPages();
 
-  const genuinelyNew = sorted.filter(g => !existing.has(identityKeyFor(g.grant))).length;
+  const genuinelyNew = sorted.filter(g => !exactMatchFor(g.grant, existing.get(identityKeyFor(g.grant)))).length;
   console.log(`   ${existing.size} in Notion now  ·  ${genuinelyNew} new candidates (before fuzzy dedup)`);
 
   let added = 0, updated = 0, merged = 0, skipped = 0, errors = 0;
 
   for (const { grant, scoring, research } of sorted) {
     const key = identityKeyFor(grant);
-    const existingPage = key ? existing.get(key) : null;
+    const existingPage = key ? exactMatchFor(grant, existing.get(key)) : null;
     // No exact fingerprint/URL match — check for the SAME real grant under
     // a different domain before treating this as genuinely new (see
     // findFuzzyMatch above).
@@ -632,7 +640,7 @@ async function syncToNotion(scoredGrants, researchCache) {
   }
 }
 
-module.exports = { syncToNotion, findFuzzyMatch, identityKeyFor };
+module.exports = { syncToNotion, findFuzzyMatch, identityKeyFor, exactMatchFor };
 
 // Allow running standalone: node src/notion-sync.js
 if (require.main === module) {

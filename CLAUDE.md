@@ -451,6 +451,82 @@ specifically from one combined announcement) — `enricher.js` re-fetches
 each record's own distinct url afterward and resolves that, same as it
 already does for `digest-expander.js` output.
 
+**LinkedIn posts that list several grants (2026-10-30)** — the old splitter
+only fired for "N fondos" + 2 external links, so HOST's 3-grant post (listed
+with ➜, no links) became one "Global Grant" record and Innpactia's 5-grant
+post lost its MIT Solve entry and gained a "Regístrate" login page as a fake
+grant. `splitPostIntoRecords()` (linkedin.js) now runs `linkedin-multi.js`:
+text lists (keycap, ➜, numbered 1.2.3., ✅ bullets) become one record per grant
+with amount/deadline from that grant's own lines; sign-up/newsletter/own-site/
+login links are flagged `junk` and never become records or the record's url.
+`✅`/`•`/`➡️` lists need a link, amount or deadline per item (eligibility
+checklists use the same bullets). Grants listed without a link fall back to the
+LinkedIn company url — their funder page must come from near-miss/deep research.
+Same day: `sameHostDifferentProgram()` (grant-fingerprint.js) stops two programs
+on one host (solve.mit.edu/challenges/<a> vs <b>) matching in `grantsMatch()`,
+`isKnown()` and notion-sync's exact-key lookup. `grantFingerprint()`'s format
+was deliberately NOT changed (persisted Notion identity key).
+
+**LinkedIn images (live, 2026-10-30)** — Jina's guest view gives no image URLs,
+so flyer-only grants were invisible. With `linkedin.images.enabled: true`
+(config/sources.yaml), `fetchLinkedInSources()` loads each company page once in
+Playwright (`linkedin-images.js`), matches posts to their media by activity URN or
+by caption text found inside the DOM card, downloads up to
+`max_posts_per_run` posts' pictures to `output/tmp_linkedin_images/`, and queues
+them in `output/linkedin_images_pending.json`. Pipeline step 1a-2
+(`node src/linkedin-image-text.js`, then `--apply`) has the session Read each
+image, writes `output/linkedin_image_text.json`, merges the text into the post,
+re-splits into one grant per item, replaces the caption-only records in
+`grants_prescored.json` BEFORE scoring, and deletes the images
+(`cleanupImageDir()` refuses any path outside the temp root). Header banners
+and photos transcribe to `""` and leave the caption record untouched. Verified
+live against allyforaction.org's page: 9 image posts found, 4 matched to captions,
+downloads work (cap raised to 12 MB — several were >6 MB GIFs). Not yet seen in a
+live run: an image that actually lists grants (the HOST posts' images were banners).
+
+**Records without a funder link** — a list item with no link keeps the poster's
+LinkedIn page as `url` and is flagged `_url_is_fallback`. `linkedin.com` is now an
+aggregator domain in `grant-fingerprint.js`: before, every such grant shared the
+fingerprint `linkedin.com||` (history.json already holds that key) and an identical
+page url counted as "same grant", so 2nd/3rd list items — and any later link-less
+LinkedIn grant — were dropped as duplicates. near-miss skips these (it would
+re-judge against LinkedIn's login wall) without marking them checked; deep research
+(live search) covers them if they reach Monitor.
+
+**Subagent prompts are files now** — deep-research.js and near-miss-check.js write each
+prompt to `output/tmp_prompts/` and print `agent_prompt` (a one-line "read this file"
+instruction) per target. Pasting 13 KB prompts into Agent calls is where the
+2026-10-30 run drifted from the skill. Scratch files are removed by
+`scripts/cleanup-temp.js --apply` (untracked scratch only; run by the launchd wrapper
+before each run and as the last pipeline step). The validate skill no longer writes
+to the log itself; the wrapper appends its stdout with real timestamps.
+
+**Repeat validation for LinkedIn grants (2026-10-30)** — pages re-list the same grants
+(a roundup and then each grant's own post; weekly bulletins; the same grant on
+two pages). Layers, in order: (1) `deduplicateGrants()` inside a run — same funder
+url or matching title, logged as `Dedup: "<a>" = "<b>"`; (2) `isKnown()`/`findKnown()`
+against history.json — scan.js now writes a `REPEAT "<title>" = "<prior title>"
+(same id | same fingerprint, first seen <date>)` line per skipped grant to the scan
+log plus a `LinkedIn: N records, M repeats, K new` line; (3) notion-sync's
+`findFuzzyMatch()` merges into an existing page. `grantsMatch()` gained a
+spacing-insensitive title rule ("GirlUp" = "Girl Up") and a small acronym table
+(`ACRONYM_EXPANSIONS`: UNEP/GEF/UNDP/GCF/IDB/IUCN/FAO/IKI ↔ spelled-out; the rest of
+the title must agree) — both found by `scripts/audit-linkedin-repeats.js`, a
+read-only tool that fetches the live pages with an empty history and says which
+extracted grants are repeats in-run, known in history, already in Notion, or new.
+Run it after adding a source or changing matching. Sibling programs of one funder
+that differ by one word are kept apart through `PROGRAM_VARIANT_TOKENS` in
+grant-fingerprint.js (`movenow`: Social Shifters "MoveNow Social Innovation
+Challenge", up to $90k, closes Dec 18, is a separate call from "Global Innovation
+Challenge 2026", up to $15k, closes Aug 31 — web-checked 2026-11-03). Add tokens
+only for pairs confirmed distinct. Numbered roundups may start "1. $7,800 – Name":
+the list-number lookahead accepts $/€/£. Segment titles also drop a bare
+"$7,800 –" prefix and blurbs that open without a lead word ("Free professional
+support…", "Monthly microgrants…").
+`startupnetworks.co.uk` is an aggregator domain (it re-lists other funders' grants).
+Image reading is skipped when the caption already carries deadlines/amounts/links
+(`captionNeedsImage()`): Startup Networks and HOST images only repeated the text.
+
 **Opinion/thought-leadership posts were being scored as candidate grants**
 (fixed 2026-09-12) — confirmed live: "2030 no es el final de los ODS." and
 "El verdadero reto de la IA para las OSC no es aprender a usar ChatGPT.",

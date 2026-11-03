@@ -88,6 +88,14 @@ so use it to correct both, for free, in the same pass):
   unless that genuinely IS the program's name. If the given Title already
   looks like a real program name, just return it unchanged — don't invent a
   "cleaner" version of something that wasn't broken.
+  Never return a title that would be meaningless in a list of hundreds of
+  grants ("Fall Grant Cycle", "Community Grants", "Annual Call", "STEM
+  K-12"). When the program name is generic, return "<Funder> — <Program>"
+  using the funder named in the Title/Description/Funder fields above (use
+  the funder's real name, not the aggregator, newsletter or portal that
+  posted it). Never write "unidentified fund" or "sin identificar" in a
+  title: if the funder truly cannot be found, keep the most specific
+  wording the text supports and say so in the reasoning field.
 - corrected_deadline: if the Description text states a concrete date or
   explicitly confirms no fixed deadline ("rolling basis", "accepted year-
   round") that the Deadline field above does NOT already reflect, return it

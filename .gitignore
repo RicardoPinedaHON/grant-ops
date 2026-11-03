@@ -5,3 +5,15 @@ org-profile.yaml
 .env
 tokens/
 .venv-agent-reach/
+
+# pipeline scratch files (removed by scripts/cleanup-temp.js)
+save-*.js
+*-temp.js
+*-temp.txt
+*-temp.json
+*_temp.*
+nearmiss_prompt_*.txt
+research_prompt_*.txt
+nearmiss_targets_*.json
+research_targets_*.json
+!scripts/cleanup-temp.js

@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { buildHTML } = require('./html-report');
-const { grantFingerprint } = require('../utils/grant-fingerprint');
+const { grantFingerprint, sameHostDifferentProgram } = require('../utils/grant-fingerprint');
 
 const OUTPUT_DIR = path.join(process.cwd(), 'output');
 const TSV_FILE = path.join(OUTPUT_DIR, 'grants.tsv');
@@ -84,11 +84,28 @@ function saveHistory(history) {
   atomicWriteJSON(HISTORY_FILE, history);
 }
 
-function isKnown(grant, history) {
-  if (history[grant.id]) return true;
+// Returns what the grant is a repeat OF ({ via, title, first_seen }) or null.
+// Used by scan.js to log WHY a grant was skipped, so repeats are auditable.
+function findKnown(grant, history) {
+  if (history[grant.id]) {
+    const e = history[grant.id];
+    return { via: 'same id', title: e.title || grant.title, first_seen: e.first_seen || null };
+  }
   // Also check by fingerprint — catches same grant with different ID across sources/runs
   const fp = grantFingerprint(grant);
-  return fp.length > 3 && !!history[`fp:${fp}`];
+  if (fp.length <= 3) return null;
+  const alias = history[`fp:${fp}`];
+  if (!alias) return null;
+  // Fingerprints written before program-path keys existed collapse every
+  // program on one host (solve.mit.edu||2027). Re-check against the grant the
+  // alias points at so a different program on the same host isn't dropped.
+  const prior = alias.grant_id && history[alias.grant_id];
+  if (prior && prior.url && sameHostDifferentProgram(grant, { title: prior.title, url: prior.url })) return null;
+  return { via: 'same fingerprint', title: alias.title || (prior && prior.title) || '?', first_seen: alias.first_seen || null };
+}
+
+function isKnown(grant, history) {
+  return !!findKnown(grant, history);
 }
 
 function markSeen(grant, history) {
@@ -271,7 +288,7 @@ function sanitize(str) {
 }
 
 module.exports = {
-  saveTSV, saveMarkdownReport, saveHTMLReport, loadHistory, saveHistory, isKnown, markSeen,
+  saveTSV, saveMarkdownReport, saveHTMLReport, loadHistory, saveHistory, isKnown, findKnown, markSeen,
   isPostSeen, markPostSeen,
   loadResearchCache, saveResearchCache, getResearch, setResearch,
 };

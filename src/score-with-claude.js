@@ -11,6 +11,7 @@
  */
 
 const fs = require('fs');
+const { qualifyTitle } = require('./utils/title-naming');
 const path = require('path');
 const yaml = require('yaml');
 const { combineScores } = require('./scorer/index');
@@ -67,6 +68,12 @@ function applyExtractionCorrections(grant, claudeResponse) {
   // Never let a short/empty response blank out a real title — only apply
   // when Claude actually returned something substantive.
   if (cleanTitle.length > 3) updated.title = cleanTitle;
+
+  // Ricardo, 2026-10-26: newsletter-sourced titles like "Fall Grant Cycle"
+  // or "STEM K-12" are meaningless in Notion without the funder. Whatever
+  // title we ended up with (Claude's or the scraper's), qualify it with the
+  // funder when it is generic and the funder is known for certain.
+  updated.title = qualifyTitle(updated.title, updated.funder, updated.source);
 
   const correctedDeadline = claudeResponse.corrected_deadline;
   if (correctedDeadline === 'rolling' || /^\d{4}-\d{2}-\d{2}$/.test(correctedDeadline || '')) {

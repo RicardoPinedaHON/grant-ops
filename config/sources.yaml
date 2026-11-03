@@ -86,6 +86,14 @@ linkedin:
   # Polite delay (ms) between company-page requests — sequential, no
   # concurrent hammering. See src/scrapers/linkedin.js.
   request_delay_ms: 3000
+  # Read flyers/carousels that carry grants only as images. scan.js downloads
+  # the pictures of up to `max_posts_per_run` new posts to a temp dir; the
+  # pipeline's step 1a-2 (src/linkedin-image-text.js) has Claude read them and
+  # deletes them. Verified live 2026-10-30 against allyforaction. Set
+  # enabled: false to turn the step off (it then no-ops).
+  images:
+    enabled: true
+    max_posts_per_run: 6
   # Public, unauthenticated access ONLY — via Jina Reader against the
   # company ROOT page (https://www.linkedin.com/company/<slug>/), never
   # /posts/ or /about/ (those return LinkedIn's login wall even through
@@ -121,6 +129,9 @@ linkedin:
       enabled: true
     - name: "Innpactia"
       url: "https://www.linkedin.com/company/innpactia/"
+      enabled: true
+    - name: "Startup Networks"
+      url: "https://www.linkedin.com/company/startup-networks/"
       enabled: true
 
 scrapers:

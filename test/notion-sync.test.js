@@ -77,3 +77,13 @@ test('identityKeyFor: prefers the fingerprint, falls back to URL when the finger
   assert.equal(identityKeyFor(grant), identityKeyFor(grant)); // deterministic
   assert.ok(identityKeyFor(grant));
 });
+
+test('exactMatchFor: a different program on the same host+year does NOT resolve to the old page (would overwrite it)', () => {
+  const { exactMatchFor } = require('../src/notion-sync');
+  const entry = { pageId: 'p1', title: '2027 Global Health Challenge', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge' };
+  const other = { title: '2027 Global Economic Prosperity Challenge', url: 'https://solve.mit.edu/challenges/2027-global-economic-prosperity-challenge' };
+  const same = { title: '2027 Global Health Challenge', url: 'https://solve.mit.edu/challenges/2027-global-health-challenge' };
+  assert.equal(exactMatchFor(other, entry), null);
+  assert.equal(exactMatchFor(same, entry), entry);
+  assert.equal(exactMatchFor(same, undefined), null);
+});

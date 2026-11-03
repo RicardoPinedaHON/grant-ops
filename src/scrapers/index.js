@@ -29,6 +29,9 @@ function deduplicateGrants(grants) {
     if (matchIdx === -1) {
       unique.push(g);
     } else {
+      if (g.type === 'linkedin' || unique[matchIdx].type === 'linkedin') {
+        console.log(`  Dedup: "${(g.title || '').slice(0, 50)}" (${g.source}) = "${(unique[matchIdx].title || '').slice(0, 50)}" (${unique[matchIdx].source})`);
+      }
       unique[matchIdx] = betterGrant(unique[matchIdx], g);
     }
   }
@@ -160,4 +163,4 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
   return unique;
 }
 
-module.exports = { fetchAllGrants };
+module.exports = { fetchAllGrants, deduplicateGrants };
