@@ -15,11 +15,16 @@ test('rules: thank-you posts, subscription ads and paid courses are NOT_A_GRANT'
     'ONGLink Latinoamérica — Premium subscription announcement',
     'Fundraising strategy course 2027',
     'Gracias por participar en nuestro taller de fondos',
+    'Funds4impact Matchmaking Webinar — Better Politics Foundation Resilient Futures Call 2027',
+    'HOST Fundraising Resource Directory',
+    'UNFPA Global Internship',
+    'Innpactia — CEO panel (not a grant)',
+    'Turn.io Learning Sessions',
   ]) assert.deepEqual(flagsFor(t), ['NOT_A_GRANT'], t);
 });
 
 test('rules: real grants are not caught by NOT_A_GRANT', () => {
-  for (const t of ['Youth Climate Fund 2026', 'Resilience Fund for Women', 'Small Grants Programme']) {
+  for (const t of ['Youth Climate Fund 2026', 'Better Politics Fund — Resilient Futures Call', 'European Open Rivers Programme Project Grants', 'Resilience Fund for Women', 'Small Grants Programme']) {
     assert.ok(!(flagsFor(t) || []).includes('NOT_A_GRANT'), t);
   }
 });
