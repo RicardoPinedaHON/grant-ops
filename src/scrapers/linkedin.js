@@ -970,6 +970,7 @@ async function fetchLinkedInSources(linkedinConfig, history) {
       if (imagesOn) imageIndex = { get: async () => (imageIndex._v ??= await require('./linkedin-images').collectImagesForSource(cfg.url)) };
       metrics.postsFetched += rawPosts.length;
 
+      const before = { n: metrics.newPosts, o: metrics.opportunitiesDetected, s: metrics.alreadySeen };
       for (const rawPost of rawPosts) {
         const post = normalizePost(rawPost, cfg, detectedAtIso);
 
@@ -1003,9 +1004,15 @@ async function fetchLinkedInSources(linkedinConfig, history) {
       }
 
       metrics.successful++;
+      require('../utils/source-status').recordLinkedIn(cfg.name, {
+        url: cfg.url, ok: true, posts_visible: rawPosts.length,
+        new_posts: metrics.newPosts - before.n, already_seen: metrics.alreadySeen - before.s,
+        opportunities: metrics.opportunitiesDetected - before.o,
+      });
       console.log(`  [LinkedIn] ${cfg.name}: ${rawPosts.length} posts visible, ${metrics.newPosts} new so far`);
     } catch (err) {
       metrics.failed++;
+      require('../utils/source-status').recordLinkedIn(cfg.name, { url: cfg.url, ok: false, error: err.message });
       console.warn(`  [LinkedIn] ${cfg.name} failed: ${err.message}`);
       // Resilience: one failing source does not abort the others.
       continue;

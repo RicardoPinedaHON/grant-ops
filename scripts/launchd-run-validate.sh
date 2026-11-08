@@ -18,4 +18,7 @@ echo "[$(date '+%d/%m/%Y %H:%M:%S')] Starting pipeline validation check (launchd
 
 run_claude validate "Follow .claude/skills/grant-pipeline-validate/SKILL.md exactly, step by step. Do not ask for approval or pause for confirmation at any step -- proceed straight through autonomously, same as grant-full-pipeline." || true
 
+# Per-run source report (output/run_report.md + run_report_whatsapp.txt); never fails the run.
+node scripts/run-report.js >> logs/pipeline_run.log 2>&1 || true
+
 echo "[$(date '+%d/%m/%Y %H:%M:%S')] Validation check done." >> logs/pipeline_run.log

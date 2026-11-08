@@ -678,6 +678,18 @@ grants found" counts across runs. If migrating to a new always-on machine,
 delete the old machine's scheduled task once the new one is confirmed
 working, don't run both.
 
+## Per-run source report (2026-11-08)
+
+`scan.js` writes `output/source_status.json` (per source group ok/error/count, per LinkedIn
+page posts visible/new/seen, per `grant.source` raw/repeats/queued). `scripts/run-report.js`
+turns it into `output/run_report.md` (every source with its link, count and state),
+`run_report.json` and `run_report_whatsapp.txt` (short Spanish digest for Hugo to forward),
+and keeps 10 runs in `source_status_history.json` so a source that drops to 0 is flagged.
+Both launchd wrappers run it after the Claude step. Pages a scraper consults are listed in
+`config/source-registry.js` (rss/linkedin come from sources.yaml): add a page there when a
+scraper gains one. A source that returns 0 every run (fundsforNGOs, USAID/Grants.gov and
+three RSS feeds on 2026-11-08) shows as a warning: that is the point of the report.
+
 ## File locations
 
 - `org-profile.yaml` — NGO profile (never committed, in .gitignore)

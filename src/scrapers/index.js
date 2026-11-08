@@ -11,6 +11,7 @@ const { fetchEmailGrants }       = require('./email-outlook');
 const { fetchLinkedInSources }   = require('./linkedin');
 const { expandAllDigests }       = require('./digest-expander');
 const { closeBrowser }           = require('./playwright-base');
+const status = require('../utils/source-status');
 
 // ── Fuzzy deduplication: URL + acronym + title similarity ────────────────────
 const { grantsMatch } = require('../utils/grant-fingerprint');
@@ -56,6 +57,9 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
     apis.grantsgov?.enabled ? fetchGrantsGov(apis.grantsgov) : Promise.resolve([]),
   ]);
 
+  for (const [k, r] of [['api:reliefweb', reliefwebGrants], ['api:grantsgov', grantsGovGrants]]) {
+    status.recordGroup(k, r.status === 'fulfilled' ? { ok: true, count: r.value.length } : { ok: false, error: r.reason?.message });
+  }
   if (reliefwebGrants.status === 'fulfilled') {
     console.log(`  ReliefWeb: ${reliefwebGrants.value.length} grants`);
     allGrants.push(...reliefwebGrants.value);
@@ -70,6 +74,7 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
   const enabledRSS = (rss || []).filter(s => s.enabled);
   const rssGrants  = await fetchRSS(enabledRSS);
   console.log(`  RSS total: ${rssGrants.length} items`);
+  status.recordGroup('rss', { ok: true, count: rssGrants.length });
   allGrants.push(...rssGrants);
 
   // --- Playwright scrapers (sequential to avoid rate limiting) ---
@@ -77,8 +82,10 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
   try {
     const ffnGrants = await fetchFundsForNGOs();
     console.log(`  fundsforNGOs: ${ffnGrants.length} grants`);
+    status.recordGroup('fundsforngos', { ok: true, count: ffnGrants.length });
     allGrants.push(...ffnGrants);
   } catch (err) {
+    status.recordGroup('fundsforngos', { ok: false, error: err.message });
     console.warn(`  fundsforNGOs failed: ${err.message}`);
   }
 
@@ -86,16 +93,20 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
   try {
     const spanishGrants = await fetchSpanishAggregators();
     console.log(`  Spanish aggregators: ${spanishGrants.length} grants`);
+    status.recordGroup('spanish', { ok: true, count: spanishGrants.length });
     allGrants.push(...spanishGrants);
   } catch (err) {
+    status.recordGroup('spanish', { ok: false, error: err.message });
     console.warn(`  Spanish aggregators failed: ${err.message}`);
   }
 
   try {
     const govGrants = await fetchUSAIDAndGrantsGov();
     console.log(`  USAID + Grants.gov: ${govGrants.length} grants`);
+    status.recordGroup('usaid', { ok: true, count: govGrants.length });
     allGrants.push(...govGrants);
   } catch (err) {
+    status.recordGroup('usaid', { ok: false, error: err.message });
     console.warn(`  USAID/Grants.gov failed: ${err.message}`);
   }
 
@@ -103,8 +114,10 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
   try {
     const foundationGrants = await fetchFoundations();
     console.log(`  Foundations: ${foundationGrants.length} grants`);
+    status.recordGroup('foundations', { ok: true, count: foundationGrants.length });
     allGrants.push(...foundationGrants);
   } catch (err) {
+    status.recordGroup('foundations', { ok: false, error: err.message });
     console.warn(`  Foundations failed: ${err.message}`);
   }
 
@@ -112,8 +125,10 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
   try {
     const newGrants = await fetchNewSources();
     console.log(`  New sources: ${newGrants.length} grants`);
+    status.recordGroup('new-sources', { ok: true, count: newGrants.length });
     allGrants.push(...newGrants);
   } catch (err) {
+    status.recordGroup('new-sources', { ok: false, error: err.message });
     console.warn(`  New sources failed: ${err.message}`);
   }
 
@@ -121,8 +136,10 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
   try {
     const portalGrants = await fetchPortals();
     console.log(`  Portals: ${portalGrants.length} grants`);
+    status.recordGroup('portals', { ok: true, count: portalGrants.length });
     allGrants.push(...portalGrants);
   } catch (err) {
+    status.recordGroup('portals', { ok: false, error: err.message });
     console.warn(`  Portals failed: ${err.message}`);
   }
 
@@ -130,8 +147,10 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
   try {
     const emailGrants = await fetchEmailGrants();
     console.log(`  Email newsletters: ${emailGrants.length} grants`);
+    status.recordGroup('email', { ok: true, count: emailGrants.length });
     allGrants.push(...emailGrants);
   } catch (err) {
+    status.recordGroup('email', { ok: false, error: err.message });
     console.warn(`  Email scan failed: ${err.message}`);
   }
 
@@ -144,8 +163,10 @@ async function fetchAllGrants(sourcesConfig, history = {}) {
       `New posts: ${linkedinMetrics.newPosts} | Already seen: ${linkedinMetrics.alreadySeen} | ` +
       `Opportunities detected: ${linkedinMetrics.opportunitiesDetected}`
     );
+    status.recordGroup('linkedin', { ok: true, count: linkedinGrants.length });
     allGrants.push(...linkedinGrants);
   } catch (err) {
+    status.recordGroup('linkedin', { ok: false, error: err.message });
     console.warn(`  LinkedIn sources failed: ${err.message}`);
   }
 
