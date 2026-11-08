@@ -40,6 +40,11 @@ const VC_ONLY          = /\b(venture capital|equity investment|seed funding for 
 const NEWS_ARTICLE     = /^(how |why |what |when |the \w+ making |from |brazil['’]s|china['’]s|microfinance for|financing the)\b/i;
 const CONFERENCE_EVENT = /\b(conference|summit|event|gala|forum|symposium|networking event)\b.*\b(call for|submission|abstract|speaker)\b/i;
 
+// Posts that are not an opportunity at all: thank-you/recap posts, a page's own
+// subscription or paid-course ads. Checked on the TITLE only (a real grant's
+// description may mention a webinar or thank its partners).
+const NOT_A_GRANT_TITLE = /\b(thank[\s-]*you|gracias\s+por\s+(participar|asistir|acompa|ser\s+parte)|workshop\s+recap|recap\s+of|resumen\s+del?\s+(taller|webinar)|(premium|pro)\s+(subscription|plan|membership)|suscripci[oó]n\s+premium|membres[ií]a\s+premium|(strategy|fundraising|grant\s+writing)\s+course|curso\s+de\s+(recaudaci|capta|redacci)|masterclass|bootcamp|diplomado)\b/i;
+
 // Grants that are just funder/org names with no specific open call (expanded from digests)
 const FUNDER_NAME_ONLY = /^(aberdeen|toyota foundation|burroughs wellcome|ernest kleinwort|convergence blended|swedish energy agency|italian agency|opec fund|global affairs canada|all good ventures|western indian ocean|dutch caribbean nature|unicef venture|international organization for migration\b|iom\b)/i;
 
@@ -62,6 +67,11 @@ function checkIneligibility(grant) {
   // 3. Course / certification / webinar (not a grant)
   if (COURSE_NOT_GRANT.test(title) && !/grant|fund|financ|award/i.test(title)) {
     return ['COURSE_NOT_GRANT'];
+  }
+
+  // 3b. Thank-you / recap posts, own subscription or paid-course ads
+  if (NOT_A_GRANT_TITLE.test(title) && !/\b(call for|open call|apply by|deadline|convocatoria\s+abierta)\b/i.test(text)) {
+    return ['NOT_A_GRANT'];
   }
 
   // 4. Venture capital / equity — NGOs can't apply

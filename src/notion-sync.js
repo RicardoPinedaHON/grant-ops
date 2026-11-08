@@ -581,7 +581,7 @@ async function syncToNotion(scoredGrants, researchCache) {
   const genuinelyNew = sorted.filter(g => !exactMatchFor(g.grant, existing.get(identityKeyFor(g.grant)))).length;
   console.log(`   ${existing.size} in Notion now  ·  ${genuinelyNew} new candidates (before fuzzy dedup)`);
 
-  let added = 0, updated = 0, merged = 0, skipped = 0, errors = 0;
+  let added = 0, updated = 0, merged = 0, skipped = 0, errors = 0, notAGrant = 0;
 
   for (const { grant, scoring, research } of sorted) {
     const key = identityKeyFor(grant);
@@ -591,6 +591,13 @@ async function syncToNotion(scoredGrants, researchCache) {
     // findFuzzyMatch above).
     const fuzzyMatch = existingPage ? null : findFuzzyMatch(grant, allPages);
     const targetPage = existingPage || fuzzyMatch;
+
+    if (!targetPage && (scoring.not_a_grant || (scoring.flags || []).includes('NOT_A_GRANT'))) {
+      // Not a grant at all (thank-you post, own subscription ad, paid course):
+      // never becomes a Notion page. An existing page is still updated below.
+      notAGrant++;
+      continue;
+    }
 
     if (!targetPage) {
       // ── New grant: create ──
@@ -625,7 +632,7 @@ async function syncToNotion(scoredGrants, researchCache) {
     }
   }
 
-  console.log(`\n   ✅ ${added} new  ·  ${updated} re-scored  ·  ${merged} merged (cross-source dedup)  ·  ${skipped} unchanged  ·  ${errors} errors`);
+  console.log(`\n   ✅ ${added} new  ·  ${updated} re-scored  ·  ${merged} merged (cross-source dedup)  ·  ${skipped} unchanged  ·  ${notAGrant} not-a-grant (not synced)  ·  ${errors} errors`);
 
   // Update the database header description with fresh stats
   try {

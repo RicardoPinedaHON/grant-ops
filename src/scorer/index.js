@@ -22,7 +22,7 @@ const MONITOR_THRESHOLD = 2.5;
 const INELIGIBLE_FLAGS = [
   'WRONG_GEOGRAPHY', 'SCHOLARSHIP_ONLY', 'COURSE_NOT_GRANT',
   'VC_ONLY', 'NEWS_ARTICLE', 'CONFERENCE_NOT_GRANT',
-  'NO_SPECIFIC_OPPORTUNITY', 'INELIGIBLE_GEO',
+  'NO_SPECIFIC_OPPORTUNITY', 'INELIGIBLE_GEO', 'NOT_A_GRANT',
 ];
 
 function scoreGrantRules(grant, profile) {
@@ -86,6 +86,9 @@ function combineScores(prescore, claudeResponse) {
       strategic_fit: strategicFit,
     },
     flags: prescore.flags,
+    // Claude judged the item is not a grant at all (see _not_a_grant in the
+    // scoring prompt): notion-sync never creates a page for these.
+    not_a_grant: claudeResponse._not_a_grant === true,
     best_projects: claudeResponse.best_projects || [],
     application_angle: claudeResponse.application_angle || null,
     confidence: claudeResponse.confidence || 'medium',
