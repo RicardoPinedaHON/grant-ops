@@ -116,6 +116,7 @@ async function main() {
       const HARD_INELIGIBLE_FLAGS = [
         'WRONG_GEOGRAPHY', 'INELIGIBLE_GEO', 'SCHOLARSHIP_ONLY', 'COURSE_NOT_GRANT',
         'VC_ONLY', 'NEWS_ARTICLE', 'NO_SPECIFIC_OPPORTUNITY', 'CONFERENCE_NOT_GRANT',
+        'NOT_A_GRANT',
       ];
       const hardFlag = prescore.flags?.find(f => HARD_INELIGIBLE_FLAGS.includes(f));
 

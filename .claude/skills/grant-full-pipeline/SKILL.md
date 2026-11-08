@@ -91,7 +91,12 @@ later turn. If a step is slow, that's fine — just wait for it.
    all (an internship, a webinar/workshop, a paid course ad, a consultancy
    contract, a vendor marketing post, an aggregator's own blog post about
    grants in general — these show up constantly from RSS/LinkedIn/email
-   sources and the pre-filter doesn't catch all of them). Do NOT put
+   sources and the pre-filter doesn't catch all of them). When it is not a
+   funding opportunity at all (thank-you/recap post, the poster's own
+   subscription or paid-course ad, vendor marketing, opinion), ALSO set
+   `_not_a_grant: true`: notion-sync never creates a page for those
+   (2026-11-07). A real grant that is merely ineligible keeps `_ineligible`
+   only, so it still lands in Notion as Ineligible. Do NOT put
    individual fellowships/prizes in this bucket (Ricardo, 2026-09-14) —
    score those normally and use `reasoning` to state the individual-
    eligibility criteria (age, career stage, etc.) and whether a real angle

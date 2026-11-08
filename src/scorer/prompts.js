@@ -115,6 +115,12 @@ so use it to correct both, for free, in the same pass):
   what's already shown, return null for both — do not guess a figure that
   isn't actually stated.
 
+- _not_a_grant: set true ONLY when the item is not a funding opportunity at all
+  (thank-you or recap post, the poster's own subscription/premium/course ad,
+  paid training, vendor marketing, opinion piece). Such items are not added to
+  Notion. Never set it for a real grant you merely find ineligible or a poor
+  fit, and omit it otherwise.
+
 Respond in this exact JSON format (no other text):
 {
   "mission_alignment": <number 0.0-1.2>,
@@ -127,7 +133,8 @@ Respond in this exact JSON format (no other text):
   "clean_title": "<the real grant/program name>",
   "corrected_deadline": "<YYYY-MM-DD, or the word rolling, or null>",
   "corrected_amount_max": <number or null>,
-  "corrected_amount_min": <number or null>
+  "corrected_amount_min": <number or null>,
+  "_not_a_grant": <true, or omit>
 }`;
 }
 
