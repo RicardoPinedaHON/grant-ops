@@ -26,4 +26,7 @@ node scripts/cleanup-temp.js --apply >> logs/pipeline_run.log 2>&1 || true
 
 run_claude pipeline "Follow .claude/skills/grant-full-pipeline/SKILL.md exactly, step by step. Do not ask for approval or pause for confirmation at any step -- proceed straight through autonomously per Ricardo's standing instruction in that skill file." || true
 
+# Per-run source report (output/run_report.md + run_report_whatsapp.txt); never fails the run.
+node scripts/run-report.js >> logs/pipeline_run.log 2>&1 || true
+
 echo "[$(date '+%d/%m/%Y %H:%M:%S')] Done." >> logs/pipeline_run.log

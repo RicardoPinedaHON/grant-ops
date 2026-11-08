@@ -43,7 +43,7 @@ const CONFERENCE_EVENT = /\b(conference|summit|event|gala|forum|symposium|networ
 // Posts that are not an opportunity at all: thank-you/recap posts, a page's own
 // subscription or paid-course ads. Checked on the TITLE only (a real grant's
 // description may mention a webinar or thank its partners).
-const NOT_A_GRANT_TITLE = /\b(thank[\s-]*you|gracias\s+por\s+(participar|asistir|acompa|ser\s+parte)|workshop\s+recap|recap\s+of|resumen\s+del?\s+(taller|webinar)|(premium|pro)\s+(subscription|plan|membership)|suscripci[oó]n\s+premium|membres[ií]a\s+premium|(strategy|fundraising|grant\s+writing)\s+course|curso\s+de\s+(recaudaci|capta|redacci)|masterclass|bootcamp|diplomado)\b/i;
+const NOT_A_GRANT_TITLE = /\b(thank[\s-]*you|gracias\s+por\s+(participar|asistir|acompa|ser\s+parte)|workshop\s+recap|recap\s+of|resumen\s+del?\s+(taller|webinar)|(premium|pro)\s+(subscription|plan|membership)|suscripci[oó]n\s+premium|membres[ií]a\s+premium|(strategy|fundraising|grant\s+writing)\s+course|curso\s+de\s+(recaudaci|capta|redacci)|masterclass|bootcamp|diplomado|webinar|internship|pasant[ií]a|resource\s+directory|directorio\s+(unificado|de\s+recursos)|learning\s+(lab|sessions?)|consultanc(y|[ií]a)\s+service)\b|\(not\s+a\s+grant\)|\(paid\s+course\)/i;
 
 // Grants that are just funder/org names with no specific open call (expanded from digests)
 const FUNDER_NAME_ONLY = /^(aberdeen|toyota foundation|burroughs wellcome|ernest kleinwort|convergence blended|swedish energy agency|italian agency|opec fund|global affairs canada|all good ventures|western indian ocean|dutch caribbean nature|unicef venture|international organization for migration\b|iom\b)/i;

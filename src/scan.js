@@ -23,6 +23,7 @@ const { buildPromptForClaude, scoreWithoutClaude, isNewsArticle, SKIP_THRESHOLD 
 const { prescoreGrant } = require('./scorer/rules');
 const { saveTSV, saveMarkdownReport, loadHistory, saveHistory, isKnown, findKnown, markSeen } = require('./tracker/index');
 const log = require('./logger');
+const sourceStatus = require('./utils/source-status');
 
 const PROFILE_PATH = path.join(process.cwd(), 'org-profile.yaml');
 const SOURCES_PATH = path.join(process.cwd(), 'config', 'sources.yaml');
@@ -197,6 +198,22 @@ async function main() {
 
   // Print quick summary
   printSummary(ruleOnlyScored);
+
+  // Per-source record for scripts/run-report.js (validation of what each source did).
+  try {
+    const per = {};
+    const row = src => (per[src] ||= { raw: 0, repeats: 0, queued: 0 });
+    for (const g of rawGrants) row(g.source).raw++;
+    for (const g of newGrants) row(g.source).repeats--; // newGrants was computed before markSeen
+    for (const r of Object.values(per)) r.repeats += r.raw;
+    for (const { grant } of prescored) row(grant.source).queued++;
+    fs.writeFileSync(path.join(OUTPUT_DIR, 'source_status.json'), JSON.stringify({
+      ran_at: new Date().toISOString(),
+      ...sourceStatus.snapshot(),
+      by_source: per,
+      totals: { fetched: rawGrants.length, already_seen: skippedCount, new: newGrants.length, queued: prescored.length },
+    }, null, 2));
+  } catch (err) { console.warn(`  source_status.json not written: ${err.message}`); }
 
   // Finish log
   log.logSummary({
